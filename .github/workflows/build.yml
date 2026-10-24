@@ -15,7 +15,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.7
-      - name: Gerar projeto Android nativo (Kotlin + Material 3)
+      - name: Gerar projeto Android nativo (Kotlin + Material 3 Expressive)
         run: |
           mkdir -p app/src/main/java/br/local/ds3
           cat > settings.gradle.kts <<'EOF'
@@ -44,10 +44,10 @@ jobs:
               compileSdk = 34
               defaultConfig {
                   applicationId = "br.local.ds3"
-                  minSdk = 24
+                  minSdk = 26
                   targetSdk = 34
-                  versionCode = 2
-                  versionName = "2.0"
+                  versionCode = 4
+                  versionName = "4.0-THP"
               }
               compileOptions {
                   sourceCompatibility = JavaVersion.VERSION_17
@@ -61,6 +61,7 @@ jobs:
               implementation(platform("androidx.compose:compose-bom:2024.06.00"))
               implementation("androidx.compose.ui:ui")
               implementation("androidx.compose.material3:material3")
+              implementation("androidx.compose.material:material-icons-extended")
               implementation("androidx.activity:activity-compose:1.9.0")
           }
           EOF
@@ -71,7 +72,7 @@ jobs:
               <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
               <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
               <uses-permission android:name="android.permission.VIBRATE" />
-              <application android:label="DS3 MED17" android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+              <application android:label="DS3 MED17" android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher" android:theme="@style/Theme.DS3">
                   <activity android:name=".MainActivity" android:exported="true"
                       android:configChanges="orientation|screenSize|keyboardHidden|uiMode|screenLayout">
                       <intent-filter>
@@ -103,56 +104,119 @@ jobs:
           import android.os.Vibrator
           import android.view.WindowManager
           import androidx.activity.ComponentActivity
+          import androidx.activity.SystemBarStyle
           import androidx.activity.compose.setContent
           import androidx.activity.enableEdgeToEdge
           import androidx.activity.result.contract.ActivityResultContracts
+          import androidx.compose.animation.animateColorAsState
+          import androidx.compose.animation.core.animateFloatAsState
+          import androidx.compose.animation.core.tween
+          import androidx.compose.foundation.BorderStroke
+          import androidx.compose.foundation.Canvas
+          import androidx.compose.foundation.background
           import androidx.compose.foundation.clickable
-          import androidx.compose.foundation.isSystemInDarkTheme
           import androidx.compose.foundation.layout.*
           import androidx.compose.foundation.lazy.LazyColumn
           import androidx.compose.foundation.lazy.grid.*
           import androidx.compose.foundation.lazy.items
           import androidx.compose.foundation.rememberScrollState
           import androidx.compose.foundation.selection.selectable
+          import androidx.compose.foundation.shape.CircleShape
+          import androidx.compose.foundation.shape.RoundedCornerShape
           import androidx.compose.foundation.text.KeyboardOptions
           import androidx.compose.foundation.verticalScroll
+          import androidx.compose.material.icons.Icons
+          import androidx.compose.material.icons.rounded.*
           import androidx.compose.material3.*
           import androidx.compose.runtime.*
           import androidx.compose.ui.Alignment
           import androidx.compose.ui.Modifier
-          import androidx.compose.ui.platform.LocalContext
+          import androidx.compose.ui.draw.clip
+          import androidx.compose.ui.geometry.Offset
+          import androidx.compose.ui.geometry.Size
+          import androidx.compose.ui.graphics.Brush
+          import androidx.compose.ui.graphics.Color
+          import androidx.compose.ui.graphics.StrokeCap
+          import androidx.compose.ui.graphics.drawscope.Stroke
           import androidx.compose.ui.semantics.Role
+          import androidx.compose.ui.text.font.FontFamily
+          import androidx.compose.ui.text.font.FontWeight
           import androidx.compose.ui.text.input.KeyboardType
+          import androidx.compose.ui.text.style.TextOverflow
           import androidx.compose.ui.unit.dp
+          import androidx.compose.ui.unit.sp
           import java.io.InputStream
           import java.io.OutputStream
+          import java.text.SimpleDateFormat
+          import java.util.Date
+          import java.util.Locale
           import java.util.UUID
+          import kotlin.math.cos
           import kotlin.math.sin
 
-          class P(val k: String, val n: String, val u: String, val c: String, val d: Int, val lo: Double, val hi: Double, val f: (IntArray) -> Double)
+          class P(
+              val k: String, val n: String, val u: String, val c: String,
+              val d: Int, val lo: Double, val hi: Double, val fast: Boolean = false,
+              val f: (IntArray) -> Double
+          )
           data class Al(val on: Boolean, val above: Boolean, val v: Double)
+          data class LogRow(
+              val tMs: Long, val rpm: Double, val boost: Double, val rail: Double,
+              val afr: Double, val adv: Double, val iat: Double, val ect: Double, val tps: Double
+          )
+
+          private val Bg = Color(0xFF090C10)
+          private val Surf = Color(0xFF121721)
+          private val Surf2 = Color(0xFF1A2130)
+          private val SurfBorder = Color(0xFF263044)
+          private val Pri = Color(0xFF00E5FF)
+          private val Amb = Color(0xFFFFAB00)
+          private val Err = Color(0xFFFF3D57)
+          private val Ok = Color(0xFF00E676)
+          private val Mute = Color(0xFF8A99AD)
+          private val Ink = Color(0xFFF0F4F8)
 
           @OptIn(ExperimentalMaterial3Api::class)
           class MainActivity : ComponentActivity() {
               private val spp = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
-              private val boostP = P("boost", "Pressão do turbo (relativa)", "bar", "", 2, -1.0, 2.0) { 0.0 }
+              private val boostP = P("boost", "Boost Relativo", "bar", "", 2, -0.8, 2.0, true) { 0.0 }
+              private val afrP = P("afr", " Mistura AFR", ":1", "", 1, 10.0, 18.0, true) { 0.0 }
+
               private val pids = listOf(
-                  P("rpm", "Rotação", "rpm", "010C", 0, 0.0, 7000.0) { (it[0] * 256 + it[1]) / 4.0 },
-                  P("spd", "Velocidade", "km/h", "010D", 0, 0.0, 220.0) { it[0].toDouble() },
-                  P("ect", "Água do motor", "°C", "0105", 0, 0.0, 120.0) { it[0] - 40.0 },
-                  P("iat", "Ar de admissão", "°C", "010F", 0, 0.0, 80.0) { it[0] - 40.0 },
-                  P("map", "Pressão no coletor", "kPa", "010B", 0, 0.0, 250.0) { it[0].toDouble() },
-                  P("tps", "Borboleta", "%", "0111", 1, 0.0, 100.0) { it[0] * 100 / 255.0 },
-                  P("ld", "Carga do motor", "%", "0104", 1, 0.0, 100.0) { it[0] * 100 / 255.0 },
-                  P("adv", "Avanço de ignição", "°", "010E", 1, -10.0, 50.0) { it[0] / 2.0 - 64 },
-                  P("st", "Correção curta", "%", "0106", 1, -25.0, 25.0) { (it[0] - 128) * 100 / 128.0 },
-                  P("lt", "Correção longa", "%", "0107", 1, -25.0, 25.0) { (it[0] - 128) * 100 / 128.0 },
-                  P("maf", "Fluxo de ar", "g/s", "0110", 1, 0.0, 250.0) { (it[0] * 256 + it[1]) / 100.0 },
-                  P("lam", "Lambda", "λ", "0124", 2, 0.6, 1.4) { (it[0] * 256 + it[1]) * 2 / 65536.0 },
-                  P("vb", "Tensão da ECU", "V", "0142", 1, 8.0, 16.0) { (it[0] * 256 + it[1]) / 1000.0 }
+                  P("rpm", "Rotação", "rpm", "010C", 0, 0.0, 7000.0, true) { (it[0] * 256 + it[1]) / 4.0 },
+                  P("map", "Pressão MAP", "kPa", "010B", 0, 20.0, 255.0, true) { it[0].toDouble() },
+                  P("rail", "Pressão Rail", "bar", "0123", 1, 0.0, 220.0, true) { ((it[0] * 256 + it[1]) * 10.0) / 100.0 },
+                  P("lam", "Lambda", "λ", "0124", 2, 0.65, 1.35, true) { (it[0] * 256 + it[1]) * 2 / 65536.0 },
+                  P("adv", "Avanço Ignição", "°", "010E", 1, -15.0, 45.0, true) { it[0] / 2.0 - 64.0 },
+                  P("tps", "Borboleta TPS", "%", "0111", 1, 0.0, 100.0, true) { it[0] * 100 / 255.0 },
+                  P("spd", "Velocidade", "km/h", "010D", 0, 0.0, 240.0, true) { it[0].toDouble() },
+                  P("iat", "Temp. Admissão (IAT)", "°C", "010F", 0, 0.0, 80.0, false) { it[0] - 40.0 },
+                  P("ect", "Temp. Água (ECT)", "°C", "0105", 0, 40.0, 120.0, false) { it[0] - 40.0 },
+                  P("cat", "Temp. Escape (EGT)", "°C", "013C", 0, 200.0, 980.0, false) { (it[0] * 256 + it[1]) / 10.0 - 40.0 },
+                  P("st", "STFT (Curto)", "%", "0106", 1, -25.0, 25.0, false) { (it[0] - 128) * 100 / 128.0 },
+                  P("lt", "LTFT (Longo)", "%", "0107", 1, -25.0, 25.0, false) { (it[0] - 128) * 100 / 128.0 },
+                  P("ld", "Carga Motor", "%", "0104", 1, 0.0, 100.0, false) { it[0] * 100 / 255.0 },
+                  P("maf", "Fluxo MAF", "g/s", "0110", 1, 0.0, 260.0, false) { (it[0] * 256 + it[1]) / 100.0 },
+                  P("vb", "Tensão ECU", "V", "0142", 2, 11.0, 15.5, false) { (it[0] * 256 + it[1]) / 1000.0 }
               )
-              private val allP = listOf(boostP) + pids
-              private val soundNames = listOf("Bipe", "Bipe duplo", "Alerta", "Alarme longo", "Som do sistema")
+              private val allP = listOf(boostP, afrP) + pids
+              private val soundNames = listOf("Bipe Curto", "Bipe Duplo", "Alerta Tático", "Alarme Contínuo", "Som Personalizado")
+
+              private val thpDtcMap = mapOf(
+                  "P0087" to "Pressão da Linha de Combustível (Rail) Muito Baixa — Verificar Bomba de Alta (HPFP)",
+                  "P0088" to "Pressão da Linha de Combustível (Rail) Muito Alta — Regulador da HPFP",
+                  "P0299" to "Pressão de Turbo Abaixo do Esperado (Underboost) — Diverter Valve (DV+), Wastegate ou Vazamento",
+                  "P0234" to "Pressão de Turbo Acima do Limite (Overboost) — Solenoide Pierburg / Mapa",
+                  "P1336" to "Falha de Ignição (Misfire) em Vários Cilindros",
+                  "P1337" to "Falha de Ignição (Misfire) no Cilindro 1 — Bobina ou Vela",
+                  "P1338" to "Falha de Ignição (Misfire) no Cilindro 2 — Bobina ou Vela",
+                  "P1339" to "Falha de Ignição (Misfire) no Cilindro 3 — Bobina ou Vela",
+                  "P1340" to "Falha de Ignição (Misfire) no Cilindro 4 — Bobina ou Vela",
+                  "P0016" to "Sincronismo Virabrequim/Comando Incorreto — Verificar Esticador/Corrente",
+                  "P0171" to "Mistura Muito Pobre (Banco 1) — Entrada Falsa de Ar ou Bomba",
+                  "P0172" to "Mistura Muito Rica (Banco 1)",
+                  "P0420" to "Eficiência do Catalisador Abaixo do Limite (Comum com Downpipe)"
+              )
 
               private val lock = Any()
               private val live = mutableStateMapOf<String, Double>()
@@ -160,16 +224,35 @@ jobs:
               private val mx = mutableStateMapOf<String, Double>()
               private val tripped = mutableStateMapOf<String, Boolean>()
               private val alerts = mutableStateMapOf<String, Al>()
-              private var status by mutableStateOf("Desconectado")
+
+              private var status by mutableStateOf("Pronto para conectar")
               private var state by mutableStateOf(0)
+              private var fastPoll by mutableStateOf(false)
+              private var shiftRpm by mutableStateOf(6200)
               private var editing by mutableStateOf<P?>(null)
               private var devs by mutableStateOf<List<BluetoothDevice>?>(null)
               private var dtcs by mutableStateOf<List<String>?>(null)
+
               private var master by mutableStateOf(true)
               private var snd by mutableStateOf(1)
               private var uri by mutableStateOf<String?>(null)
               private var cool by mutableStateOf(8)
               private var vibe by mutableStateOf(true)
+              private var hz by mutableStateOf(0.0)
+
+              // Datalogger state
+              private var isLogging by mutableStateOf(false)
+              private var logStartMs = 0L
+              private val logData = mutableStateListOf<LogRow>()
+
+              // Performance Timer state (0-100 / 40-120)
+              private var dragArmed by mutableStateOf(false)
+              private var dragRunning by mutableStateOf(false)
+              private var dragStartMs = 0L
+              private var drag40StartMs = 0L
+              private var time0to60 by mutableStateOf<Double?>(null)
+              private var time0to100 by mutableStateOf<Double?>(null)
+              private var time40to120 by mutableStateOf<Double?>(null)
 
               private lateinit var sp: SharedPreferences
               private var lastAddr: String? = null
@@ -191,25 +274,51 @@ jobs:
                   }
               }
 
-              // ---------- persistência ----------
+              private val exportCsvLauncher = registerForActivityResult(ActivityResultContracts.CreateDocument("text/csv")) { docUri ->
+                  if (docUri != null) {
+                      runCatching {
+                          contentResolver.openOutputStream(docUri)?.use { os ->
+                              val sb = StringBuilder()
+                              sb.append("Time_s,RPM,Boost_bar,Rail_bar,AFR,Ign_Adv_deg,IAT_C,ECT_C,TPS_pct\n")
+                              logData.forEach { r ->
+                                  sb.append(
+                                      String.format(
+                                          Locale.US, "%.3f,%.0f,%.2f,%.1f,%.2f,%.1f,%.0f,%.0f,%.1f\n",
+                                          r.tMs / 1000.0, r.rpm, r.boost, r.rail, r.afr, r.adv, r.iat, r.ect, r.tps
+                                      )
+                                  )
+                              }
+                              os.write(sb.toString().toByteArray())
+                          }
+                      }
+                  }
+              }
+
               private fun load() {
                   sp = getSharedPreferences("ds3", 0)
-                  master = sp.getBoolean("master", true); snd = sp.getInt("snd", 1); uri = sp.getString("uri", null)
-                  cool = sp.getInt("cool", 8); vibe = sp.getBoolean("vibe", true); lastAddr = sp.getString("addr", null)
+                  master = sp.getBoolean("master", true)
+                  snd = sp.getInt("snd", 1)
+                  uri = sp.getString("uri", null)
+                  cool = sp.getInt("cool", 8)
+                  vibe = sp.getBoolean("vibe", true)
+                  shiftRpm = sp.getInt("shiftRpm", 6200)
+                  lastAddr = sp.getString("addr", null)
                   for (p in allP) sp.getString("al_" + p.k, null)?.split(",")?.let {
                       if (it.size == 3) alerts[p.k] = Al(it[0] == "1", it[1] == "1", it[2].toDoubleOrNull() ?: 0.0)
                   }
                   if (alerts["ect"] == null) alerts["ect"] = Al(true, true, 105.0)
+                  if (alerts["iat"] == null) alerts["iat"] = Al(true, true, 55.0)
+                  if (alerts["rail"] == null) alerts["rail"] = Al(false, false, 50.0)
               }
 
               private fun save() {
                   val e = sp.edit()
-                  e.putBoolean("master", master).putInt("snd", snd).putString("uri", uri).putInt("cool", cool).putBoolean("vibe", vibe)
+                  e.putBoolean("master", master).putInt("snd", snd).putString("uri", uri)
+                      .putInt("cool", cool).putBoolean("vibe", vibe).putInt("shiftRpm", shiftRpm)
                   alerts.forEach { (k, a) -> e.putString("al_$k", "${if (a.on) 1 else 0},${if (a.above) 1 else 0},${a.v}") }
                   e.apply()
               }
 
-              // ---------- som ----------
               @Suppress("DEPRECATION")
               private fun beep() {
                   if (snd == 4 && uri != null) {
@@ -227,14 +336,13 @@ jobs:
                       }
                       tg.startTone(t, if (snd == 3) 2000 else 700)
                   }
-                  if (vibe) runCatching { (getSystemService(VIBRATOR_SERVICE) as Vibrator).vibrate(500) }
+                  if (vibe) runCatching { (getSystemService(VIBRATOR_SERVICE) as Vibrator).vibrate(450) }
               }
 
               private fun soundTitle(): String = try {
                   RingtoneManager.getRingtone(this, Uri.parse(uri)).getTitle(this)
               } catch (e: Exception) { "Nenhum som escolhido" }
 
-              // ---------- conexão ----------
               private fun setState(s: Int, msg: String) {
                   state = s; status = msg
                   runOnUiThread {
@@ -253,7 +361,7 @@ jobs:
               override fun onRequestPermissionsResult(rc: Int, p: Array<String>, r: IntArray) {
                   super.onRequestPermissionsResult(rc, p, r)
                   if (r.isNotEmpty() && r[0] == PackageManager.PERMISSION_GRANTED) pending?.invoke()
-                  else setState(0, "Permissão negada. Ative Dispositivos próximos nas permissões do app.")
+                  else setState(0, "Permissão Bluetooth negada.")
                   pending = null
               }
 
@@ -263,7 +371,7 @@ jobs:
                   val ad = adapter()
                   if (ad == null || !ad.isEnabled) { setState(0, "Ligue o Bluetooth do celular."); return }
                   val l = ad.bondedDevices.toList()
-                  if (l.isEmpty()) { setState(0, "Nenhum adaptador pareado. Pareie o ELM327 nas configurações do Android (PIN 1234 ou 0000)."); return }
+                  if (l.isEmpty()) { setState(0, "Pareie o scanner ELM327 no Android primeiro."); return }
                   devs = l
               }
 
@@ -275,10 +383,9 @@ jobs:
               }
 
               private fun connect(d: BluetoothDevice) {
-                  setState(1, "Conectando…")
+                  setState(1, "Inicializando protocolo CAN (MED17.4.2)…")
                   Thread {
                       try {
-                          // sem busca ativa: nao precisa cancelar descoberta (evita exigir BLUETOOTH_SCAN)
                           var s = d.createRfcommSocketToServiceRecord(spp)
                           try { s.connect() } catch (x: Exception) {
                               try { s.close() } catch (y: Exception) {}
@@ -286,24 +393,24 @@ jobs:
                               s.connect()
                           }
                           sock = s; inp = s.inputStream; out = s.outputStream
-                          for (c in listOf("ATZ", "ATE0", "ATL0", "ATS0", "ATH0", "ATSP6")) ask(c)
+                          for (c in listOf("ATZ", "ATE0", "ATL0", "ATS0", "ATH0", "ATSP6", "ATAT1")) ask(c)
                           var r = ask("0100", 8000)
                           if (!r.replace(" ", "").contains("4100")) { ask("ATSP0"); r = ask("0100", 15000) }
-                          if (!r.replace(" ", "").contains("4100")) throw Exception("ECU não respondeu. Ligue a ignição.")
+                          if (!r.replace(" ", "").contains("4100")) throw Exception("ECU não respondeu. Verifique a ignição.")
                           bytes(ask("0133"), "33")?.let { baro = it[0].toDouble() }
                           fails.clear(); live.clear(); mn.clear(); mx.clear(); tripped.clear()
                           lastAddr = d.address; sp.edit().putString("addr", d.address).apply()
                           running = true
-                          setState(2, "Conectado a " + (d.name ?: d.address))
+                          setState(2, "Conectado • " + (d.name ?: d.address))
                           loop()
                       } catch (e: Exception) {
                           close()
-                          setState(0, "Erro: " + e.message)
+                          setState(0, "Falha: " + e.message)
                       }
                   }.start()
               }
 
-              private fun ask(c: String, wait: Long = 5000): String {
+              private fun ask(c: String, wait: Long = 4000): String {
                   val i = inp!!
                   val o = out!!
                   while (i.available() > 0) i.read()
@@ -311,7 +418,11 @@ jobs:
                   val sb = StringBuilder()
                   val t = System.currentTimeMillis()
                   while (System.currentTimeMillis() - t < wait) {
-                      if (i.available() > 0) { val ch = i.read(); if (ch == 62) break; sb.append(ch.toChar()) } else Thread.sleep(8)
+                      if (i.available() > 0) {
+                          val ch = i.read()
+                          if (ch == 62) break
+                          sb.append(ch.toChar())
+                      } else Thread.sleep(5)
                   }
                   return sb.toString()
               }
@@ -329,21 +440,83 @@ jobs:
               }
 
               private fun loop() {
+                  var reads = 0
+                  var tWindow = SystemClock.elapsedRealtime()
                   while (running) {
-                      for (p in pids) {
+                      val activeList = if (fastPoll) pids.filter { it.fast } else pids
+                      for (p in activeList) {
                           if (!running) return
                           if ((fails[p.k] ?: 0) >= 3) continue
                           try {
                               val b = synchronized(lock) { bytes(ask(p.c), p.c.substring(2)) }
                               if (b == null) { fails[p.k] = (fails[p.k] ?: 0) + 1; continue }
                               val v = runCatching { p.f(b) }.getOrNull() ?: continue
-                              show(p, v)
-                              if (p.k == "map") show(boostP, (v - baro) / 100)
+                              onNewValue(p, v)
+                              reads++
+                              val now = SystemClock.elapsedRealtime()
+                              if (now - tWindow >= 1000L) {
+                                  hz = reads * 1000.0 / (now - tWindow)
+                                  reads = 0
+                                  tWindow = now
+                              }
                           } catch (e: Exception) {
-                              if (running) { running = false; close(); setState(0, "Conexão perdida") }
+                              if (running) { running = false; close(); setState(0, "Conexão perdida com o ELM327") }
                               return
                           }
                       }
+                      recordLogTick()
+                  }
+              }
+
+              private fun onNewValue(p: P, v: Double) {
+                  show(p, v)
+                  if (p.k == "map") show(boostP, (v - baro) / 100.0)
+                  if (p.k == "lam") show(afrP, v * 14.7)
+                  if (p.k == "spd") updateDragTimer(v)
+              }
+
+              private fun updateDragTimer(spd: Double) {
+                  val now = SystemClock.elapsedRealtime()
+                  if (dragArmed && !dragRunning) {
+                      if (spd > 2.0) {
+                          dragRunning = true
+                          dragStartMs = now
+                          drag40StartMs = 0L
+                      }
+                  }
+                  if (dragRunning) {
+                      if (spd >= 40.0 && drag40StartMs == 0L) drag40StartMs = now
+                      if (spd >= 60.0 && time0to60 == null) time0to60 = (now - dragStartMs) / 1000.0
+                      if (spd >= 100.0 && time0to100 == null) time0to100 = (now - dragStartMs) / 1000.0
+                      if (spd >= 120.0 && drag40StartMs > 0L && time40to120 == null) {
+                          time40to120 = (now - drag40StartMs) / 1000.0
+                          dragArmed = false
+                          dragRunning = false
+                      }
+                      if (time0to100 != null && spd < 5.0) {
+                          dragArmed = false
+                          dragRunning = false
+                      }
+                  }
+              }
+
+              private fun recordLogTick() {
+                  if (!isLogging) return
+                  val now = SystemClock.elapsedRealtime()
+                  if (logData.size < 15000) {
+                      logData.add(
+                          LogRow(
+                              tMs = now - logStartMs,
+                              rpm = live["rpm"] ?: 0.0,
+                              boost = live["boost"] ?: 0.0,
+                              rail = live["rail"] ?: 0.0,
+                              afr = live["afr"] ?: 14.7,
+                              adv = live["adv"] ?: 0.0,
+                              iat = live["iat"] ?: 0.0,
+                              ect = live["ect"] ?: 0.0,
+                              tps = live["tps"] ?: 0.0
+                          )
+                      )
                   }
               }
 
@@ -360,24 +533,39 @@ jobs:
                   }
               }
 
+              private fun resetPeaks() {
+                  mn.clear(); mx.clear(); tripped.clear()
+              }
+
               private fun demo() {
                   running = true
                   live.clear(); mn.clear(); mx.clear(); tripped.clear()
-                  setState(2, "Modo demonstração (valores simulados)")
+                  setState(2, "Simulação Stage 3 THP Ativa")
                   Thread {
                       val t0 = System.currentTimeMillis()
                       while (running) {
                           val t = (System.currentTimeMillis() - t0) / 1000.0
+                          val throttle = ((sin(t * 0.65) + 1.0) / 2.0).coerceIn(0.05, 1.0)
                           pids.forEachIndexed { i, p ->
                               val v = when (p.k) {
-                                  "ect" -> 88 + 2 * sin(t / 4)
-                                  "lam" -> 1 + 0.03 * sin(t * 1.4)
-                                  else -> p.lo + (p.hi - p.lo) * (0.18 + 0.12 * sin(t * (0.4 + i * 0.13) + i))
+                                  "rpm" -> 850.0 + throttle * 5650.0
+                                  "map" -> 35.0 + throttle * 215.0
+                                  "rail" -> 50.0 + throttle * 145.0
+                                  "lam" -> 1.0 - (if (throttle > 0.65) 0.18 else 0.02 * sin(t * 2.0))
+                                  "adv" -> 18.0 - throttle * 8.0 + 4.0 * sin(t)
+                                  "tps" -> throttle * 100.0
+                                  "spd" -> (throttle * 165.0).coerceAtLeast(0.0)
+                                  "ect" -> 89.0 + 3.0 * sin(t / 6.0)
+                                  "iat" -> 34.0 + throttle * 14.0
+                                  "cat" -> 420.0 + throttle * 440.0
+                                  "vb" -> 14.1 + 0.1 * cos(t)
+                                  else -> p.lo + (p.hi - p.lo) * (0.3 + 0.2 * sin(t * (0.4 + i * 0.1)))
                               }
-                              show(p, v)
-                              if (p.k == "map") show(boostP, (v - 101) / 100)
+                              onNewValue(p, v)
                           }
-                          Thread.sleep(250)
+                          hz = if (fastPoll) 18.5 else 9.2
+                          recordLogTick()
+                          Thread.sleep(if (fastPoll) 90 else 180)
                       }
                   }.start()
               }
@@ -404,53 +592,173 @@ jobs:
               }
 
               private fun close() { try { sock?.close() } catch (x: Exception) {}; sock = null }
-              private fun stop(msg: String) { running = false; close(); setState(0, msg) }
-              private fun fmt(p: P, v: Double) = "%.${p.d}f".format(v)
+              private fun stop(msg: String) { running = false; isLogging = false; close(); setState(0, msg) }
+              private fun fmt(p: P, v: Double) = "%.${p.d}f".format(Locale.US, v)
 
-              // ---------- interface ----------
               override fun onCreate(b: Bundle?) {
                   super.onCreate(b)
-                  enableEdgeToEdge()
+                  enableEdgeToEdge(
+                      statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+                      navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
+                  )
                   load()
                   setContent { AppTheme { App() } }
               }
 
               @Composable
               private fun AppTheme(content: @Composable () -> Unit) {
-                  val dark = isSystemInDarkTheme()
-                  val ctx = LocalContext.current
-                  val cs = when {
-                      Build.VERSION.SDK_INT >= 31 && dark -> dynamicDarkColorScheme(ctx)
-                      Build.VERSION.SDK_INT >= 31 -> dynamicLightColorScheme(ctx)
-                      dark -> darkColorScheme()
-                      else -> lightColorScheme()
-                  }
+                  val cs = darkColorScheme(
+                      primary = Pri, onPrimary = Color(0xFF00262C),
+                      secondary = Amb, onSecondary = Color(0xFF332000),
+                      background = Bg, onBackground = Ink,
+                      surface = Surf, onSurface = Ink,
+                      surfaceVariant = Surf2, onSurfaceVariant = Mute,
+                      error = Err, errorContainer = Color(0xFF421018), onErrorContainer = Color(0xFFFFDAD6),
+                      primaryContainer = Color(0xFF004853), onPrimaryContainer = Color(0xFFB4F6FF),
+                      secondaryContainer = Color(0xFF232C3D), onSecondaryContainer = Ink,
+                      outline = SurfBorder
+                  )
                   MaterialTheme(colorScheme = cs, content = content)
+              }
+
+              @Composable
+              private fun cc(c: Color = Surf) = CardDefaults.cardColors(containerColor = c, contentColor = Ink)
+
+              @Composable
+              private fun Header() {
+                  Column(Modifier.fillMaxWidth().background(Bg).statusBarsPadding()) {
+                      Row(
+                          Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 10.dp),
+                          verticalAlignment = Alignment.CenterVertically
+                      ) {
+                          Column(Modifier.weight(1f)) {
+                              Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                  Text("DS3", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Black, color = Ink)
+                                  Surface(
+                                      color = Pri.copy(alpha = 0.14f), shape = RoundedCornerShape(6.dp),
+                                      border = BorderStroke(1.dp, Pri.copy(alpha = 0.4f))
+                                  ) {
+                                      Text(
+                                          "MED17.4.2", Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                          style = MaterialTheme.typography.labelSmall, color = Pri, fontWeight = FontWeight.Bold
+                                      )
+                                  }
+                              }
+                              Text(
+                                  if (state == 2) "$status • ${"%.1f".format(Locale.US, hz)} Hz" else status,
+                                  style = MaterialTheme.typography.bodySmall, color = Mute, maxLines = 1, overflow = TextOverflow.Ellipsis
+                              )
+                          }
+                          if (state == 2) {
+                              IconButton(onClick = { resetPeaks() }) {
+                                  Icon(Icons.Rounded.Refresh, contentDescription = "Zerar Picos", tint = Mute)
+                              }
+                          }
+                          val (dot, label) = when {
+                              state == 1 -> Amb to "CAN..."
+                              state == 2 && sock == null -> Pri to "DEMO"
+                              state == 2 -> Ok to "ONLINE"
+                              else -> Mute to "OFFLINE"
+                          }
+                          Surface(
+                              shape = RoundedCornerShape(50), color = Surf2,
+                              border = BorderStroke(1.dp, dot.copy(alpha = 0.4f))
+                          ) {
+                              Row(Modifier.padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                                  Box(Modifier.size(8.dp).clip(CircleShape).background(dot))
+                                  Spacer(Modifier.width(6.dp))
+                                  Text(label, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = dot)
+                              }
+                          }
+                      }
+                      ShiftLightBar()
+                  }
+              }
+
+              @Composable
+              private fun ShiftLightBar() {
+                  val rpm = live["rpm"] ?: 0.0
+                  val startRpm = (shiftRpm - 1800).coerceAtLeast(3000)
+                  val progress = ((rpm - startRpm) / (shiftRpm - startRpm)).toFloat().coerceIn(0f, 1f)
+                  val segments = 14
+                  val activeSegments = (progress * segments).toInt()
+                  val overShift = rpm >= shiftRpm
+
+                  Row(
+                      Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                      horizontalArrangement = Arrangement.spacedBy(4.dp)
+                  ) {
+                      for (i in 0 until segments) {
+                          val segColor = when {
+                              overShift -> Err
+                              i >= activeSegments -> Surf2
+                              i < segments * 0.5f -> Ok
+                              i < segments * 0.8f -> Amb
+                              else -> Err
+                          }
+                          Box(
+                              Modifier.weight(1f).height(6.dp).clip(RoundedCornerShape(3.dp)).background(segColor)
+                          )
+                      }
+                  }
               }
 
               @Composable
               private fun App() {
                   var tab by remember { mutableStateOf(0) }
                   Scaffold(
-                      topBar = { CenterAlignedTopAppBar(title = { Text("DS3 – MED17.4.2") }) },
+                      containerColor = Bg,
+                      topBar = { Header() },
                       bottomBar = {
-                          NavigationBar {
-                              listOf("Painel" to "📊", "Alertas" to "🔔", "Falhas" to "🛠").forEachIndexed { i, (n, e) ->
-                                  NavigationBarItem(selected = tab == i, onClick = { tab = i }, icon = { Text(e) }, label = { Text(n) })
+                          NavigationBar(containerColor = Surf, tonalElevation = 0.dp) {
+                              val navItems = listOf(
+                                  Triple("Cockpit", Icons.Rounded.Speed, 0),
+                                  Triple("Dragy", Icons.Rounded.Timer, 1),
+                                  Triple("Logs", Icons.Rounded.FiberManualRecord, 2),
+                                  Triple("Alertas", Icons.Rounded.NotificationsActive, 3),
+                                  Triple("ECU/DTC", Icons.Rounded.Build, 4)
+                              )
+                              navItems.forEach { (n, ic, i) ->
+                                  NavigationBarItem(
+                                      selected = tab == i, onClick = { tab = i },
+                                      icon = { Icon(ic, contentDescription = n) },
+                                      label = { Text(n, maxLines = 1) },
+                                      colors = NavigationBarItemDefaults.colors(
+                                          indicatorColor = Pri.copy(alpha = 0.16f),
+                                          selectedIconColor = Pri, selectedTextColor = Pri,
+                                          unselectedIconColor = Mute, unselectedTextColor = Mute
+                                      )
+                                  )
                               }
                           }
                       }
                   ) { pad ->
                       Box(Modifier.padding(pad)) {
-                          when (tab) { 0 -> Panel(); 1 -> Alerts(); else -> Dtcs() }
+                          when (tab) {
+                              0 -> Panel()
+                              1 -> PerformanceScreen()
+                              2 -> DatalogScreen()
+                              3 -> Alerts()
+                              else -> Dtcs()
+                          }
                       }
                   }
                   editing?.let { EditDialog(it) }
                   devs?.let { l ->
                       AlertDialog(
+                          containerColor = Surf2,
                           onDismissRequest = { devs = null },
-                          title = { Text("Escolha o adaptador") },
-                          text = { Column { l.forEach { d -> TextButton(onClick = { devs = null; connect(d) }) { Text(d.name ?: d.address) } } } },
+                          title = { Text("Selecionar Scanner OBD2") },
+                          text = {
+                              Column {
+                                  l.forEach { d ->
+                                      TextButton(
+                                          onClick = { devs = null; connect(d) },
+                                          modifier = Modifier.fillMaxWidth()
+                                      ) { Text(d.name ?: d.address, color = Pri) }
+                                  }
+                              }
+                          },
                           confirmButton = {},
                           dismissButton = { TextButton(onClick = { devs = null }) { Text("Cancelar") } }
                       )
@@ -459,112 +767,401 @@ jobs:
 
               @Composable
               private fun Panel() {
+                  val hits = allP.filter { tripped[it.k] == true }
+                  val gridItems = listOf(pids[2], afrP) + pids.drop(3) // Rail + AFR no topo, seguido do resto
+
                   LazyVerticalGrid(
-                      columns = GridCells.Fixed(2), modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(12.dp),
-                      horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)
+                      columns = GridCells.Fixed(2), modifier = Modifier.fillMaxSize(),
+                      contentPadding = PaddingValues(16.dp, 8.dp, 16.dp, 20.dp),
+                      horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)
                   ) {
                       item(span = { GridItemSpan(maxLineSpan) }) { ConnCard() }
-                      item(span = { GridItemSpan(maxLineSpan) }) { ParamCard(boostP, true) }
-                      items(pids) { ParamCard(it, false) }
+                      if (hits.isNotEmpty()) item(span = { GridItemSpan(maxLineSpan) }) {
+                          Card(
+                              colors = cc(Color(0xFF421018)), shape = RoundedCornerShape(18.dp),
+                              border = BorderStroke(1.dp, Err), modifier = Modifier.fillMaxWidth()
+                          ) {
+                              Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                                  Icon(Icons.Rounded.Warning, contentDescription = null, tint = Err)
+                                  Spacer(Modifier.width(10.dp))
+                                  Text(
+                                      "ALERTA: " + hits.joinToString { "${it.n} (${fmt(it, live[it.k] ?: 0.0)}${it.u})" },
+                                      color = Color(0xFFFFDAD6), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold
+                                  )
+                              }
+                          }
+                      }
+                      item(span = { GridItemSpan(maxLineSpan) }) {
+                          Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                              Gauge(pids[0], Modifier.weight(1f))
+                              Gauge(boostP, Modifier.weight(1f))
+                          }
+                      }
+                      items(gridItems) { Metric(it) }
                   }
               }
 
               @Composable
               private fun ConnCard() {
-                  Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
-                      Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                          Text(status, style = MaterialTheme.typography.titleMedium)
-                          Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                              if (state == 2) Button(onClick = { stop("Desconectado") }) { Text("Desconectar") }
-                              else Button(enabled = state == 0, onClick = { needPerm { connectLast() } }) { Text("Conectar") }
-                              OutlinedButton(enabled = state == 0, onClick = { demo() }) { Text("Demo") }
-                              if (state == 0) TextButton(onClick = { needPerm { pick() } }) { Text("Adaptador") }
+                  Card(
+                      colors = cc(), shape = RoundedCornerShape(20.dp),
+                      border = BorderStroke(1.dp, SurfBorder), modifier = Modifier.fillMaxWidth()
+                  ) {
+                      Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                          Row(
+                              Modifier.fillMaxWidth(),
+                              horizontalArrangement = Arrangement.spacedBy(8.dp),
+                              verticalAlignment = Alignment.CenterVertically
+                          ) {
+                              if (state == 2) {
+                                  Button(
+                                      onClick = { stop("Desconectado") },
+                                      colors = ButtonDefaults.buttonColors(containerColor = Err, contentColor = Color.White)
+                                  ) {
+                                      Icon(Icons.Rounded.PowerSettingsNew, contentDescription = null, modifier = Modifier.size(18.dp))
+                                      Spacer(Modifier.width(6.dp))
+                                      Text("Parar")
+                                  }
+                              } else {
+                                  Button(enabled = state == 0, onClick = { needPerm { connectLast() } }) {
+                                      Icon(Icons.Rounded.BluetoothConnected, contentDescription = null, modifier = Modifier.size(18.dp))
+                                      Spacer(Modifier.width(6.dp))
+                                      Text("Conectar")
+                                  }
+                              }
+                              FilledTonalButton(enabled = state == 0, onClick = { demo() }) { Text("Simular Stage 3") }
+                              if (state == 0) {
+                                  IconButton(onClick = { needPerm { pick() } }) {
+                                      Icon(Icons.Rounded.SettingsBluetooth, contentDescription = "Escolher Adaptador", tint = Pri)
+                                  }
+                              }
+                          }
+                          Row(
+                              Modifier.fillMaxWidth(),
+                              horizontalArrangement = Arrangement.spacedBy(8.dp),
+                              verticalAlignment = Alignment.CenterVertically
+                          ) {
+                              FilterChip(
+                                  selected = fastPoll,
+                                  onClick = { fastPoll = !fastPoll },
+                                  label = { Text("Fast Poll (WOT)") },
+                                  leadingIcon = { Icon(Icons.Rounded.Bolt, contentDescription = null, modifier = Modifier.size(16.dp)) }
+                              )
+                              FilterChip(
+                                  selected = isLogging,
+                                  onClick = {
+                                      if (!isLogging) { logData.clear(); logStartMs = SystemClock.elapsedRealtime(); isLogging = true }
+                                      else isLogging = false
+                                  },
+                                  label = { Text(if (isLogging) "REC (${logData.size})" else "Gravar Log") },
+                                  leadingIcon = {
+                                      Icon(
+                                          Icons.Rounded.FiberManualRecord, contentDescription = null,
+                                          tint = if (isLogging) Err else Mute, modifier = Modifier.size(14.dp)
+                                      )
+                                  }
+                              )
                           }
                       }
                   }
               }
 
               @Composable
-              private fun ParamCard(p: P, big: Boolean) {
+              private fun Gauge(p: P, modifier: Modifier) {
+                  val v = live[p.k]
+                  val peak = mx[p.k]
+                  val hit = tripped[p.k] == true
+                  val frac = (((v ?: p.lo) - p.lo) / (p.hi - p.lo)).toFloat().coerceIn(0f, 1f)
+                  val peakFrac = (((peak ?: p.lo) - p.lo) / (p.hi - p.lo)).toFloat().coerceIn(0f, 1f)
+                  val anim by animateFloatAsState(frac, animationSpec = tween(140), label = "gauge")
+                  val col by animateColorAsState(
+                      when { hit || frac > 0.88f -> Err; frac > 0.72f -> Amb; else -> Pri }, label = "color"
+                  )
+
+                  Card(
+                      onClick = { editing = p }, modifier = modifier, colors = cc(),
+                      shape = RoundedCornerShape(24.dp), border = BorderStroke(1.dp, if (hit) Err else SurfBorder)
+                  ) {
+                      Box(Modifier.fillMaxWidth().aspectRatio(1f), contentAlignment = Alignment.Center) {
+                          Canvas(Modifier.fillMaxSize().padding(14.dp)) {
+                              val w = 13.dp.toPx()
+                              val s = Size(size.minDimension - w, size.minDimension - w)
+                              val tl = Offset(w / 2, w / 2)
+                              drawArc(Surf2, 135f, 270f, false, tl, s, style = Stroke(w, cap = StrokeCap.Round))
+                              drawArc(
+                                  Brush.sweepGradient(listOf(Pri, col, Err)),
+                                  135f, 270f * anim, false, tl, s, style = Stroke(w, cap = StrokeCap.Round)
+                              )
+                              if (peak != null && peakFrac > 0.05f) {
+                                  drawArc(
+                                      Amb, 135f + 270f * peakFrac - 2f, 4f, false, tl, s,
+                                      style = Stroke(w + 4.dp.toPx(), cap = StrokeCap.Butt)
+                                  )
+                              }
+                          }
+                          Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                              Text(
+                                  if (v == null) "–" else fmt(p, v),
+                                  style = MaterialTheme.typography.headlineLarge.copy(
+                                      fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold
+                                  ),
+                                  color = if (hit) Err else Ink
+                              )
+                              Text("${p.u} • pico ${if (peak == null) "–" else fmt(p, peak)}", style = MaterialTheme.typography.labelSmall, color = Mute)
+                          }
+                          Text(
+                              p.n, Modifier.align(Alignment.BottomCenter).padding(bottom = 10.dp),
+                              style = MaterialTheme.typography.labelMedium, color = Mute, fontWeight = FontWeight.SemiBold
+                          )
+                      }
+                  }
+              }
+
+              @Composable
+              private fun Metric(p: P) {
                   val v = live[p.k]
                   val hit = tripped[p.k] == true
-                  val colors = if (hit) CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer) else CardDefaults.cardColors()
-                  Card(onClick = { editing = p }, colors = colors) {
-                      Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                  val dimmed = fastPoll && !p.fast
+                  Card(
+                      onClick = { editing = p },
+                      colors = cc(if (hit) Color(0xFF381117) else if (dimmed) Bg else Surf),
+                      shape = RoundedCornerShape(18.dp),
+                      border = BorderStroke(1.dp, if (hit) Err else SurfBorder)
+                  ) {
+                      Column(Modifier.padding(13.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                           Row(verticalAlignment = Alignment.CenterVertically) {
-                              Text(p.n, style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f))
-                              if (alerts[p.k]?.on == true) Text("🔔")
+                              Text(
+                                  p.n, style = MaterialTheme.typography.labelMedium,
+                                  color = if (dimmed) Mute.copy(alpha = 0.5f) else Mute,
+                                  modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis
+                              )
+                              if (alerts[p.k]?.on == true) {
+                                  Icon(Icons.Rounded.NotificationsActive, contentDescription = null, tint = Amb, modifier = Modifier.size(14.dp))
+                              }
                           }
                           Row(verticalAlignment = Alignment.Bottom) {
-                              Text(if (v == null) "–" else fmt(p, v), style = if (big) MaterialTheme.typography.displayMedium else MaterialTheme.typography.headlineMedium)
-                              Spacer(Modifier.width(6.dp))
-                              Text(p.u, style = MaterialTheme.typography.bodyMedium)
+                              Text(
+                                  if (v == null) "–" else fmt(p, v),
+                                  style = MaterialTheme.typography.headlineSmall.copy(
+                                      fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold
+                                  ),
+                                  color = if (hit) Err else if (dimmed) Mute else Ink
+                              )
+                              Spacer(Modifier.width(5.dp))
+                              Text(p.u, style = MaterialTheme.typography.labelSmall, color = Mute, modifier = Modifier.padding(bottom = 3.dp))
                           }
                           LinearProgressIndicator(
                               progress = { (((v ?: p.lo) - p.lo) / (p.hi - p.lo)).toFloat().coerceIn(0f, 1f) },
-                              modifier = Modifier.fillMaxWidth(),
-                              color = if (hit) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+                              modifier = Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp)),
+                              color = if (hit) Err else Pri, trackColor = Surf2
                           )
                           val a = mn[p.k]; val z = mx[p.k]
-                          Text(if (a == null || z == null) "mín –   máx –" else "mín ${fmt(p, a)}   máx ${fmt(p, z)}", style = MaterialTheme.typography.bodySmall)
+                          Text(
+                              if (a == null || z == null) "mín –   máx –" else "mín ${fmt(p, a)}   máx ${fmt(p, z)}",
+                              style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace, fontSize = 10.sp),
+                              color = Mute
+                          )
+                      }
+                  }
+              }
+
+              @Composable
+              private fun PerformanceScreen() {
+                  val spd = live["spd"] ?: 0.0
+                  Column(
+                      Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+                      verticalArrangement = Arrangement.spacedBy(12.dp)
+                  ) {
+                      Card(colors = cc(), shape = RoundedCornerShape(22.dp), border = BorderStroke(1.dp, SurfBorder), modifier = Modifier.fillMaxWidth()) {
+                          Column(Modifier.padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                              Text("VELOCIDADE ATUAL (OBD)", style = MaterialTheme.typography.labelMedium, color = Mute)
+                              Text(
+                                  "${"%.0f".format(spd)} km/h",
+                                  style = MaterialTheme.typography.displayMedium.copy(fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Black),
+                                  color = Pri
+                              )
+                              val statusTxt = when {
+                                  dragRunning -> "CRONÔMETRO DISPARADO! ACELERE!"
+                                  dragArmed -> "ARMADO — Pare o carro e largue quando quiser"
+                                  else -> "Toque em Armar Cronômetro para iniciar a puxada"
+                              }
+                              Text(statusTxt, style = MaterialTheme.typography.bodyMedium, color = if (dragArmed) Ok else Mute)
+                              Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                  Button(
+                                      onClick = {
+                                          time0to60 = null; time0to100 = null; time40to120 = null
+                                          dragRunning = false; dragArmed = true
+                                      }
+                                  ) {
+                                      Icon(Icons.Rounded.Flag, contentDescription = null)
+                                      Spacer(Modifier.width(6.dp))
+                                      Text(if (dragArmed) "Reiniciar Puxada" else "Armar Cronômetro")
+                                  }
+                                  if (dragArmed || dragRunning) {
+                                      OutlinedButton(onClick = { dragArmed = false; dragRunning = false }) { Text("Cancelar") }
+                                  }
+                              }
+                          }
+                      }
+
+                      Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                          DragCard("0 – 60 km/h", time0to60, Modifier.weight(1f))
+                          DragCard("0 – 100 km/h", time0to100, Modifier.weight(1f))
+                      }
+                      DragCard("Retomada 40 – 120 km/h", time40to120, Modifier.fillMaxWidth())
+                  }
+              }
+
+              @Composable
+              private fun DragCard(title: String, sec: Double?, modifier: Modifier) {
+                  Card(colors = cc(), shape = RoundedCornerShape(18.dp), border = BorderStroke(1.dp, SurfBorder), modifier = modifier) {
+                      Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                          Text(title, style = MaterialTheme.typography.labelLarge, color = Mute)
+                          Text(
+                              if (sec == null) "--.-- s" else String.format(Locale.US, "%.2f s", sec),
+                              style = MaterialTheme.typography.headlineMedium.copy(fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold),
+                              color = if (sec != null) Ok else Ink
+                          )
+                      }
+                  }
+              }
+
+              @Composable
+              private fun DatalogScreen() {
+                  Column(
+                      Modifier.fillMaxSize().padding(16.dp),
+                      verticalArrangement = Arrangement.spacedBy(12.dp)
+                  ) {
+                      Card(colors = cc(), shape = RoundedCornerShape(22.dp), border = BorderStroke(1.dp, SurfBorder), modifier = Modifier.fillMaxWidth()) {
+                          Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                              Text("Datalogger CSV (Telemetria MED17)", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                              Text(
+                                  "Grava RPM, Boost, Pressão de Rail, AFR, Avanço de Ignição, IAT, ECT e TPS em formato compatível com MegaLogViewer / Excel.",
+                                  style = MaterialTheme.typography.bodySmall, color = Mute
+                              )
+                              Text(
+                                  "Amostras na memória: ${logData.size} linhas",
+                                  style = MaterialTheme.typography.labelLarge.copy(fontFamily = FontFamily.Monospace), color = Pri
+                              )
+                              Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                  Button(
+                                      onClick = {
+                                          if (!isLogging) { logData.clear(); logStartMs = SystemClock.elapsedRealtime(); isLogging = true }
+                                          else isLogging = false
+                                      },
+                                      colors = ButtonDefaults.buttonColors(containerColor = if (isLogging) Err else Pri)
+                                  ) {
+                                      Icon(if (isLogging) Icons.Rounded.Stop else Icons.Rounded.FiberManualRecord, contentDescription = null)
+                                      Spacer(Modifier.width(6.dp))
+                                      Text(if (isLogging) "Parar Gravação" else "Iniciar Log")
+                                  }
+                                  OutlinedButton(
+                                      enabled = logData.isNotEmpty() && !isLogging,
+                                      onClick = {
+                                          val stamp = SimpleDateFormat("yyyyMMdd_HHmm", Locale.US).format(Date())
+                                          exportCsvLauncher.launch("DS3_THP_Log_$stamp.csv")
+                                      }
+                                  ) {
+                                      Icon(Icons.Rounded.Download, contentDescription = null)
+                                      Spacer(Modifier.width(6.dp))
+                                      Text("Exportar CSV")
+                                  }
+                              }
+                          }
+                      }
+
+                      if (logData.isNotEmpty()) {
+                          val last = logData.last()
+                          Card(colors = cc(Surf2), shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
+                              Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                  Text("Último frame gravado (${String.format(Locale.US, "%.1f", last.tMs / 1000.0)}s):", style = MaterialTheme.typography.labelMedium, color = Mute)
+                                  Text(
+                                      "RPM: ${last.rpm.toInt()} | Boost: ${"%.2f".format(Locale.US, last.boost)} bar | Rail: ${"%.1f".format(Locale.US, last.rail)} bar | AFR: ${"%.1f".format(Locale.US, last.afr)} | Ign: ${"%.1f".format(Locale.US, last.adv)}°",
+                                      style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace), color = Ink
+                                  )
+                              }
+                          }
                       }
                   }
               }
 
               @Composable
               private fun Alerts() {
-                  LazyColumn(contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxSize()) {
+                  LazyColumn(
+                      contentPadding = PaddingValues(16.dp, 8.dp, 16.dp, 20.dp),
+                      verticalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxSize()
+                  ) {
                       item {
-                          Card {
-                              Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                          Card(colors = cc(), shape = RoundedCornerShape(22.dp), border = BorderStroke(1.dp, SurfBorder), modifier = Modifier.fillMaxWidth()) {
+                              Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                  Text("Shift Light (Corte Visual)", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                                  Text("Disparo em: $shiftRpm RPM", style = MaterialTheme.typography.labelLarge, color = Pri)
+                                  Slider(
+                                      value = shiftRpm.toFloat(),
+                                      onValueChange = { shiftRpm = (it.toInt() / 100) * 100 },
+                                      valueRange = 4500f..7000f,
+                                      onValueChangeFinished = { save() }
+                                  )
+                                  HorizontalDivider(color = SurfBorder)
                                   Row(verticalAlignment = Alignment.CenterVertically) {
-                                      Text("Alertas sonoros", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                                      Text("Alertas Sonoros de Segurança", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
                                       Switch(checked = master, onCheckedChange = { master = it; save() })
                                   }
-                                  Text("Som do alerta", style = MaterialTheme.typography.labelLarge)
                                   soundNames.forEachIndexed { i, n ->
                                       Row(
-                                          Modifier.fillMaxWidth().selectable(selected = snd == i, role = Role.RadioButton, onClick = { snd = i; save() }).padding(vertical = 6.dp),
+                                          Modifier.fillMaxWidth().selectable(selected = snd == i, role = Role.RadioButton, onClick = { snd = i; save() }).padding(vertical = 4.dp),
                                           verticalAlignment = Alignment.CenterVertically
                                       ) {
                                           RadioButton(selected = snd == i, onClick = null)
-                                          Spacer(Modifier.width(12.dp))
+                                          Spacer(Modifier.width(10.dp))
                                           Text(n)
                                       }
                                   }
                                   if (snd == 4) {
-                                      Text(if (uri == null) "Nenhum som escolhido" else soundTitle(), style = MaterialTheme.typography.bodyMedium)
+                                      Text(if (uri == null) "Nenhum som escolhido" else soundTitle(), style = MaterialTheme.typography.bodySmall, color = Mute)
                                       OutlinedButton(onClick = {
                                           val it = Intent(RingtoneManager.ACTION_RINGTONE_PICKER)
                                               .putExtra(RingtoneManager.EXTRA_RINGTONE_TYPE, RingtoneManager.TYPE_ALL)
                                           pickSound.launch(it)
-                                      }) { Text("Escolher som…") }
+                                      }) { Text("Escolher toque…") }
                                   }
                                   Row(verticalAlignment = Alignment.CenterVertically) {
-                                      Text("Vibrar junto", modifier = Modifier.weight(1f))
+                                      Text("Vibrar no alerta", modifier = Modifier.weight(1f))
                                       Switch(checked = vibe, onCheckedChange = { vibe = it; save() })
                                   }
-                                  Text("Repetir a cada $cool s", style = MaterialTheme.typography.labelLarge)
+                                  Text("Cooldown entre alertas: $cool s", style = MaterialTheme.typography.labelLarge, color = Mute)
                                   Slider(value = cool.toFloat(), onValueChange = { cool = it.toInt() }, valueRange = 2f..30f, steps = 27, onValueChangeFinished = { save() })
-                                  Button(onClick = { beep() }) { Text("Testar som") }
+                                  OutlinedButton(onClick = { beep() }) { Text("Testar Alerta") }
                               }
                           }
                       }
-                      item { Text("Limites por parâmetro (toque para editar)", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 8.dp)) }
+                      item {
+                          Text(
+                              "Watchdogs por sensor (toque para configurar limite)",
+                              style = MaterialTheme.typography.titleSmall, color = Mute, modifier = Modifier.padding(top = 6.dp, start = 4.dp)
+                          )
+                      }
                       items(allP) { p ->
                           val a = alerts[p.k]
-                          ListItem(
-                              modifier = Modifier.clickable { editing = p },
-                              headlineContent = { Text(p.n) },
-                              supportingContent = {
-                                  Text(if (a == null || !a.on) "Desligado" else (if (a.above) "Avisar acima de " else "Avisar abaixo de ") + fmt(p, a.v) + " " + p.u)
-                              },
-                              trailingContent = {
-                                  Switch(checked = a?.on == true, onCheckedChange = {
-                                      alerts[p.k] = (a ?: Al(false, true, (p.lo + p.hi) / 2)).copy(on = it); save()
-                                  })
-                              }
-                          )
+                          Card(colors = cc(), shape = RoundedCornerShape(16.dp), border = BorderStroke(1.dp, SurfBorder), modifier = Modifier.fillMaxWidth()) {
+                              ListItem(
+                                  colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                                  modifier = Modifier.clickable { editing = p },
+                                  headlineContent = { Text(p.n, fontWeight = FontWeight.SemiBold) },
+                                  supportingContent = {
+                                      Text(
+                                          if (a == null || !a.on) "Monitoramento desligado"
+                                          else (if (a.above) "Alerta se > " else "Alerta se < ") + fmt(p, a.v) + " " + p.u,
+                                          color = if (a?.on == true) Pri else Mute
+                                      )
+                                  },
+                                  trailingContent = {
+                                      Switch(checked = a?.on == true, onCheckedChange = {
+                                          alerts[p.k] = (a ?: Al(false, true, (p.lo + p.hi) / 2)).copy(on = it); save()
+                                      })
+                                  }
+                              )
+                          }
                       }
                   }
               }
@@ -576,12 +1173,13 @@ jobs:
                   var above by remember { mutableStateOf(a.above) }
                   var txt by remember { mutableStateOf(fmt(p, a.v)) }
                   AlertDialog(
+                      containerColor = Surf2,
                       onDismissRequest = { editing = null },
-                      title = { Text("Alerta: " + p.n) },
+                      title = { Text("Watchdog: " + p.n) },
                       text = {
                           Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                               Row(verticalAlignment = Alignment.CenterVertically) {
-                                  Text("Ativar", modifier = Modifier.weight(1f))
+                                  Text("Habilitar Alerta", modifier = Modifier.weight(1f))
                                   Switch(checked = on, onCheckedChange = { on = it })
                               }
                               Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -589,13 +1187,14 @@ jobs:
                                   FilterChip(selected = !above, onClick = { above = false }, label = { Text("Abaixo de") })
                               }
                               OutlinedTextField(
-                                  value = txt, onValueChange = { txt = it }, singleLine = true, label = { Text("Valor (" + p.u + ")") },
+                                  value = txt, onValueChange = { txt = it }, singleLine = true,
+                                  label = { Text("Limite (${p.u})") },
                                   keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
                               )
                           }
                       },
                       confirmButton = {
-                          TextButton(onClick = {
+                          Button(onClick = {
                               val v = txt.replace(',', '.').toDoubleOrNull() ?: a.v
                               alerts[p.k] = Al(on, above, v); save(); editing = null
                           }) { Text("Salvar") }
@@ -608,23 +1207,65 @@ jobs:
               private fun Dtcs() {
                   var confirm by remember { mutableStateOf(false) }
                   val ok = state == 2 && sock != null
-                  Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                      Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                          Button(enabled = ok, onClick = { readDtc() }) { Text("Ler falhas") }
-                          OutlinedButton(enabled = ok, onClick = { confirm = true }) { Text("Apagar falhas") }
+                  Column(
+                      Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+                      verticalArrangement = Arrangement.spacedBy(10.dp)
+                  ) {
+                      Card(colors = cc(), shape = RoundedCornerShape(20.dp), border = BorderStroke(1.dp, SurfBorder), modifier = Modifier.fillMaxWidth()) {
+                          Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                              Text("Diagnóstico Bosch MED17.4.2", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                              Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                  Button(enabled = ok, onClick = { readDtc() }) {
+                                      Icon(Icons.Rounded.Search, contentDescription = null)
+                                      Spacer(Modifier.width(6.dp))
+                                      Text("Ler DTCs")
+                                  }
+                                  OutlinedButton(enabled = ok, onClick = { confirm = true }) {
+                                      Icon(Icons.Rounded.DeleteSweep, contentDescription = null)
+                                      Spacer(Modifier.width(6.dp))
+                                      Text("Limpar ECU")
+                                  }
+                              }
+                          }
                       }
                       val l = dtcs
                       when {
-                          l == null -> Text(if (ok) "Toque em Ler falhas." else "Conecte ao carro para ler os códigos de falha.")
-                          l.isEmpty() -> Card { Text("Nenhuma falha armazenada.", Modifier.padding(16.dp)) }
-                          else -> l.forEach { Card(Modifier.fillMaxWidth()) { Text(it, Modifier.padding(16.dp), style = MaterialTheme.typography.titleMedium) } }
+                          l == null -> Text(
+                              if (ok) "Toque em Ler DTCs para varrer a memória de avarias."
+                              else "Conecte ao ELM327 com a ignição ligada para ler códigos da injeção.",
+                              color = Mute, modifier = Modifier.padding(8.dp)
+                          )
+                          l.isEmpty() -> Card(colors = cc(), shape = RoundedCornerShape(18.dp), border = BorderStroke(1.dp, Ok.copy(alpha = 0.5f)), modifier = Modifier.fillMaxWidth()) {
+                              Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                                  Icon(Icons.Rounded.CheckCircle, contentDescription = null, tint = Ok)
+                                  Spacer(Modifier.width(10.dp))
+                                  Text("Nenhuma falha registrada na MED17.4.2.", color = Ok, fontWeight = FontWeight.SemiBold)
+                              }
+                          }
+                          else -> l.forEach { code ->
+                              Card(colors = cc(Color(0xFF381117)), shape = RoundedCornerShape(18.dp), border = BorderStroke(1.dp, Err), modifier = Modifier.fillMaxWidth()) {
+                                  Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                      Text(code, style = MaterialTheme.typography.titleLarge.copy(fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold), color = Err)
+                                      Text(
+                                          thpDtcMap[code] ?: "Código de falha OBD2 genérico ou específico PSA.",
+                                          style = MaterialTheme.typography.bodyMedium, color = Color(0xFFFFDAD6)
+                                      )
+                                  }
+                              }
+                          }
                       }
                   }
                   if (confirm) AlertDialog(
+                      containerColor = Surf2,
                       onDismissRequest = { confirm = false },
-                      title = { Text("Apagar códigos de falha?") },
-                      text = { Text("Os códigos e os dados de congelamento serão apagados da ECU. Se o problema continuar, as falhas voltam.") },
-                      confirmButton = { TextButton(onClick = { confirm = false; clearDtc() }) { Text("Apagar") } },
+                      title = { Text("Limpar Avarias (Modo 04)?") },
+                      text = { Text("Isso apagará a luz de injeção (MIL) e os parâmetros de Freeze Frame da MED17.4.2.") },
+                      confirmButton = {
+                          Button(
+                              colors = ButtonDefaults.buttonColors(containerColor = Err),
+                              onClick = { confirm = false; clearDtc() }
+                          ) { Text("Apagar Tudo") }
+                      },
                       dismissButton = { TextButton(onClick = { confirm = false }) { Text("Cancelar") } }
                   )
               }
@@ -634,6 +1275,40 @@ jobs:
                   super.onDestroy()
               }
           }
+          EOF
+          mkdir -p app/src/main/res/values app/src/main/res/drawable app/src/main/res/mipmap-anydpi-v26
+          cat > app/src/main/res/values/colors.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <color name="bg">#090C10</color>
+          </resources>
+          EOF
+          cat > app/src/main/res/values/themes.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <style name="Theme.DS3" parent="android:Theme.Material.NoActionBar">
+                  <item name="android:windowBackground">@color/bg</item>
+                  <item name="android:statusBarColor">@android:color/transparent</item>
+                  <item name="android:navigationBarColor">@android:color/transparent</item>
+              </style>
+          </resources>
+          EOF
+          cat > app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+              <background android:drawable="@color/bg" />
+              <foreground android:drawable="@drawable/ic_fg" />
+          </adaptive-icon>
+          EOF
+          cat > app/src/main/res/drawable/ic_fg.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+              <path android:pathData="M30,70 A28,28 0 1,1 80.7,47.3" android:strokeColor="#00E5FF" android:strokeWidth="6.5" android:strokeLineCap="round" />
+              <path android:pathData="M80.7,47.3 A28,28 0 0,1 78,70" android:strokeColor="#FF3D57" android:strokeWidth="6.5" android:strokeLineCap="round" />
+              <path android:pathData="M54,55.6 L65,36.5" android:strokeColor="#FFAB00" android:strokeWidth="5.5" android:strokeLineCap="round" />
+              <path android:pathData="M54,55.6m-5,0a5,5 0 1,1 10,0a5,5 0 1,1 -10,0" android:fillColor="#F0F4F8" />
+          </vector>
           EOF
       - name: Compilar APK
         run: gradle assembleDebug --no-daemon
