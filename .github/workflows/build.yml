@@ -15,13 +15,13 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.7
-      - name: Gerar projeto Android nativo (Kotlin + Material 3 + Custom Layout Cockpit)
+      - name: Gerar projeto Android nativo (MED17 Dash)
         run: |
-          mkdir -p app/src/main/java/br/local/ds3
+          mkdir -p app/src/main/java/br/local/ds3 app/src/main/res/values app/src/main/res/drawable app/src/main/res/mipmap-anydpi-v26
           cat > settings.gradle.kts <<'EOF'
           pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
           dependencyResolutionManagement { repositories { google(); mavenCentral() } }
-          rootProject.name = "DS3"
+          rootProject.name = "MED17Dash"
           include(":app")
           EOF
           cat > build.gradle.kts <<'EOF'
@@ -46,8 +46,8 @@ jobs:
                   applicationId = "br.local.ds3"
                   minSdk = 26
                   targetSdk = 34
-                  versionCode = 7
-                  versionName = "5.0-CUSTOM-COCKPIT"
+                  versionCode = 8
+                  versionName = "6.0"
               }
               compileOptions {
                   sourceCompatibility = JavaVersion.VERSION_17
@@ -72,7 +72,9 @@ jobs:
               <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
               <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
               <uses-permission android:name="android.permission.VIBRATE" />
-              <application android:label="DS3 MED17" android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher" android:theme="@style/Theme.DS3">
+              <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+              <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+              <application android:label="MED17 Dash" android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher" android:theme="@style/Theme.DS3">
                   <activity android:name=".MainActivity" android:exported="true"
                       android:configChanges="orientation|screenSize|keyboardHidden|uiMode|screenLayout">
                       <intent-filter>
@@ -93,6 +95,9 @@ jobs:
           import android.content.Intent
           import android.content.SharedPreferences
           import android.content.pm.PackageManager
+          import android.location.Location
+          import android.location.LocationListener
+          import android.location.LocationManager
           import android.media.AudioAttributes
           import android.media.AudioManager
           import android.media.RingtoneManager
@@ -100,6 +105,8 @@ jobs:
           import android.net.Uri
           import android.os.Build
           import android.os.Bundle
+          import android.os.Handler
+          import android.os.Looper
           import android.os.SystemClock
           import android.os.Vibrator
           import android.view.WindowManager
@@ -240,9 +247,12 @@ jobs:
               private fun activePids(): List<P> = basePids + customSpecs.map { it.toP() }
               private fun allParams(): List<P> = listOf(boostP, afrP) + activePids()
 
-              // Layout customizável do Cockpit (Keys visíveis)
+              // Layout customizável do Cockpit: ordem, tamanho (0=P, 1=M, 2=G) e estilo (mostrador/cartão)
               private val visibleCockpitKeys = mutableStateListOf<String>()
               private var editLayoutMode by mutableStateOf(false)
+              private val cockpitSize = mutableStateMapOf<String, Int>()
+              private val cockpitGauge = mutableStateMapOf<String, Boolean>()
+              private fun gaugeStyle(k: String) = cockpitGauge[k] ?: (k == "rpm" || k == "boost")
 
               private val soundNames = listOf("Bipe Curto", "Bipe Duplo", "Alerta Tático", "Alarme Contínuo", "Som Personalizado")
 
@@ -307,11 +317,41 @@ jobs:
 
               private var dragArmed by mutableStateOf(false)
               private var dragRunning by mutableStateOf(false)
-              private var dragStartMs = 0L
-              private var drag40StartMs = 0L
               private var time0to60 by mutableStateOf<Double?>(null)
               private var time0to100 by mutableStateOf<Double?>(null)
               private var time40to120 by mutableStateOf<Double?>(null)
+
+              // ---- GPS (Dragy) ----
+              private val locMgr by lazy { getSystemService(LOCATION_SERVICE) as LocationManager }
+              private var gpsOn by mutableStateOf(false)
+              private var gpsKmh by mutableStateOf<Double?>(null)
+              private var gpsFresh by mutableStateOf(false)
+              private var gpsMsg by mutableStateOf("")
+              private var gpsLastFix = 0L
+              private var gpsPrevV = -1.0
+              private var gpsPrevT = 0L
+              private var dragStartT = 0L
+              private var drag40T = 0L
+              private val gpsHandler = Handler(Looper.getMainLooper())
+              private val gpsTick = object : Runnable {
+                  override fun run() {
+                      gpsFresh = SystemClock.elapsedRealtime() - gpsLastFix < 3000
+                      if (gpsOn) gpsHandler.postDelayed(this, 1000)
+                  }
+              }
+              private val locListener = object : LocationListener {
+                  override fun onLocationChanged(l: Location) {
+                      if (!l.hasSpeed()) return
+                      onGpsFix(l.elapsedRealtimeNanos / 1_000_000L, l.speed * 3.6)
+                  }
+                  override fun onProviderEnabled(provider: String) {}
+                  override fun onProviderDisabled(provider: String) { gpsMsg = "GPS desligado nas configurações" }
+                  @Deprecated("Deprecated in Java")
+                  override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
+              }
+              private val locPermLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { r ->
+                  if (r.values.any { it }) startGps() else gpsMsg = "Permissão de localização negada"
+              }
 
               private lateinit var sp: SharedPreferences
               private var lastAddr: String? = null
@@ -398,8 +438,19 @@ jobs:
                       }
                   }
                   if (visibleCockpitKeys.isEmpty()) {
-                      // Padrão inicial com todos os principais parâmetros visíveis
                       visibleCockpitKeys.addAll(listOf("rpm", "boost", "rail", "afr", "map16", "map_tgt", "adv", "tps", "spd", "iat", "ect", "cat", "st", "lt", "ld", "maf", "vb"))
+                  }
+
+                  cockpitSize.clear(); cockpitGauge.clear()
+                  sp.getString("cockpit_cfg", null)?.let { js ->
+                      runCatching {
+                          val o = JSONObject(js)
+                          o.keys().forEach { k ->
+                              val c = o.getJSONObject(k)
+                              cockpitSize[k] = c.optInt("s", 0)
+                              cockpitGauge[k] = c.optBoolean("g", false)
+                          }
+                      }
                   }
 
                   for (p in allParams()) sp.getString("al_" + p.k, null)?.split(",")?.let {
@@ -429,6 +480,12 @@ jobs:
                   val arrKeys = JSONArray()
                   visibleCockpitKeys.forEach { arrKeys.put(it) }
                   e.putString("visible_cockpit_keys", arrKeys.toString())
+
+                  val cfg = JSONObject()
+                  visibleCockpitKeys.forEach { k ->
+                      cfg.put(k, JSONObject().put("s", cockpitSize[k] ?: 0).put("g", gaugeStyle(k)))
+                  }
+                  e.putString("cockpit_cfg", cfg.toString())
                   e.apply()
               }
 
@@ -673,30 +730,59 @@ jobs:
                       }
                   }
                   if (p.k == "lam") show(afrP, v * 14.7)
-                  if (p.k == "spd") updateDragTimer(v)
               }
 
-              private fun updateDragTimer(spd: Double) {
-                  val now = SystemClock.elapsedRealtime()
+              // ---------- GPS / Dragy ----------
+              private fun hasLocPerm() =
+                  checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+
+              private fun ensureGps() {
+                  if (hasLocPerm()) startGps()
+                  else locPermLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
+              }
+
+              private fun startGps() {
+                  if (gpsOn || !hasLocPerm()) return
+                  if (!locMgr.isProviderEnabled(LocationManager.GPS_PROVIDER)) { gpsMsg = "Ative o GPS do celular"; return }
+                  try {
+                      locMgr.requestLocationUpdates(LocationManager.GPS_PROVIDER, 0L, 0f, locListener, Looper.getMainLooper())
+                      gpsOn = true; gpsMsg = ""; gpsPrevV = -1.0
+                      gpsHandler.postDelayed(gpsTick, 1000)
+                  } catch (e: Exception) { gpsMsg = "GPS indisponível: " + e.message }
+              }
+
+              private fun stopGps() {
+                  if (!gpsOn) return
+                  runCatching { locMgr.removeUpdates(locListener) }
+                  gpsOn = false; gpsKmh = null; gpsFresh = false; gpsPrevV = -1.0
+                  gpsHandler.removeCallbacks(gpsTick)
+              }
+
+              // Tempos por GPS: interpola o instante exato em que a velocidade cruza cada limiar entre dois fixes.
+              private fun onGpsFix(t: Long, v: Double) {
+                  gpsKmh = v; gpsLastFix = SystemClock.elapsedRealtime(); gpsFresh = true
+                  val pv = gpsPrevV
+                  val pt = gpsPrevT
+                  gpsPrevV = v; gpsPrevT = t
+                  if (pv < 0.0 || t <= pt) return
+                  fun cross(th: Double): Long? =
+                      if (pv < th && v >= th) pt + ((th - pv) / (v - pv) * (t - pt)).toLong() else null
                   if (dragArmed && !dragRunning) {
-                      if (spd > 2.0) {
-                          dragRunning = true
-                          dragStartMs = now
-                          drag40StartMs = 0L
-                      }
+                      val c = cross(1.0)
+                      if (c != null) { dragRunning = true; dragStartT = c; drag40T = 0L }
                   }
                   if (dragRunning) {
-                      if (spd >= 40.0 && drag40StartMs == 0L) drag40StartMs = now
-                      if (spd >= 60.0 && time0to60 == null) time0to60 = (now - dragStartMs) / 1000.0
-                      if (spd >= 100.0 && time0to100 == null) time0to100 = (now - dragStartMs) / 1000.0
-                      if (spd >= 120.0 && drag40StartMs > 0L && time40to120 == null) {
-                          time40to120 = (now - drag40StartMs) / 1000.0
-                          dragArmed = false
-                          dragRunning = false
+                      cross(40.0)?.let { if (drag40T == 0L) drag40T = it }
+                      cross(60.0)?.let { if (time0to60 == null) time0to60 = (it - dragStartT) / 1000.0 }
+                      cross(100.0)?.let { if (time0to100 == null) time0to100 = (it - dragStartT) / 1000.0 }
+                      cross(120.0)?.let {
+                          if (drag40T > 0L && time40to120 == null) time40to120 = (it - drag40T) / 1000.0
+                          dragArmed = false; dragRunning = false
                       }
-                      if (time0to100 != null && spd < 5.0) {
-                          dragArmed = false
-                          dragRunning = false
+                      if (time0to60 == null && t - dragStartT > 5000L && v < 8.0) {
+                          dragRunning = false // falsa partida: continua armado
+                      } else if (t - dragStartT > 90_000L || (time0to100 != null && v < 5.0)) {
+                          dragArmed = false; dragRunning = false
                       }
                   }
               }
@@ -736,6 +822,14 @@ jobs:
 
               private fun resetPeaks() {
                   mn.clear(); mx.clear(); tripped.clear(); fails.clear()
+              }
+
+              private fun resetCockpit() {
+                  cockpitSize.clear(); cockpitGauge.clear()
+                  visibleCockpitKeys.clear()
+                  visibleCockpitKeys.addAll(listOf("rpm", "boost", "rail", "afr", "map16", "map_tgt", "adv", "tps", "spd", "iat", "ect", "cat", "st", "lt", "ld", "maf", "vb"))
+                  visibleCockpitKeys.addAll(customSpecs.map { it.key })
+                  save()
               }
 
               private fun demo() {
@@ -836,13 +930,13 @@ jobs:
                       ) {
                           Column(Modifier.weight(1f)) {
                               Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                  Text("DS3", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Black, color = Ink)
+                                  Text("MED17", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Black, color = Ink)
                                   Surface(
                                       color = Pri.copy(alpha = 0.14f), shape = RoundedCornerShape(6.dp),
                                       border = BorderStroke(1.dp, Pri.copy(alpha = 0.4f))
                                   ) {
                                       Text(
-                                          "MED17.4.2 UDS", Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                          "4.2", Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
                                           style = MaterialTheme.typography.labelSmall, color = Pri, fontWeight = FontWeight.Bold
                                       )
                                   }
@@ -1287,7 +1381,6 @@ jobs:
                           }
                       }
 
-                      // Barra de controles de edição do layout
                       item(span = { GridItemSpan(maxLineSpan) }) {
                           Card(colors = cc(Surf2), shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth()) {
                               Row(
@@ -1299,17 +1392,32 @@ jobs:
                                       Icon(Icons.Rounded.DashboardCustomize, contentDescription = null, tint = Pri, modifier = Modifier.size(18.dp))
                                       Text("Cockpit (${visibleList.size} ativos)", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
                                   }
-                                  TextButton(
-                                      onClick = { editLayoutMode = !editLayoutMode },
-                                      contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
-                                  ) {
-                                      Text(if (editLayoutMode) "Concluir Edição" else "⚙️ Organizar Tela", color = if (editLayoutMode) Ok else Pri, fontWeight = FontWeight.Bold)
+                                  Row(verticalAlignment = Alignment.CenterVertically) {
+                                      if (editLayoutMode) {
+                                          TextButton(onClick = { resetCockpit() }, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)) {
+                                              Text("Padrão", color = Mute)
+                                          }
+                                      }
+                                      TextButton(
+                                          onClick = { editLayoutMode = !editLayoutMode },
+                                          contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                                      ) {
+                                          Text(if (editLayoutMode) "Concluir" else "Organizar Tela", color = if (editLayoutMode) Ok else Pri, fontWeight = FontWeight.Bold)
+                                      }
                                   }
                               }
                           }
                       }
 
-                      // Se houver parâmetros ocultos e em modo de edição, exibe chips para adicionar de volta
+                      if (editLayoutMode) {
+                          item(span = { GridItemSpan(maxLineSpan) }) {
+                              Text(
+                                  "◀ ▶ muda a posição  •  Tam P/M/G muda o tamanho  •  Mostrador/Cartão muda o estilo  •  ✕ oculta",
+                                  style = MaterialTheme.typography.labelSmall, color = Amb
+                              )
+                          }
+                      }
+
                       if (editLayoutMode && hiddenList.isNotEmpty()) {
                           item(span = { GridItemSpan(maxLineSpan) }) {
                               Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -1320,10 +1428,7 @@ jobs:
                                   ) {
                                       hiddenList.forEach { hid ->
                                           AssistChip(
-                                              onClick = {
-                                                  visibleCockpitKeys.add(hid.k)
-                                                  save()
-                                              },
+                                              onClick = { visibleCockpitKeys.add(hid.k); save() },
                                               label = { Text("+ ${hid.n}") }
                                           )
                                       }
@@ -1332,84 +1437,58 @@ jobs:
                           }
                       }
 
-                      // Renderiza todos os gauges circulares fixos no topo se estiverem visíveis, ou métricas padrão
-                      items(visibleList, key = { it.k }) { p ->
-                          val isCircular = p.k == "rpm" || p.k == "boost"
-                          if (isCircular) {
-                              GaugeCardWrapper(p, editLayoutMode,
-                                  onMoveLeft = {
-                                      val idx = visibleCockpitKeys.indexOf(p.k)
-                                      if (idx > 0) { visibleCockpitKeys.removeAt(idx); visibleCockpitKeys.add(idx - 1, p.k); save() }
-                                  },
-                                  onMoveRight = {
-                                      val idx = visibleCockpitKeys.indexOf(p.k)
-                                      if (idx < visibleCockpitKeys.size - 1) { visibleCockpitKeys.removeAt(idx); visibleCockpitKeys.add(idx + 1, p.k); save() }
-                                  },
-                                  onHide = {
-                                      visibleCockpitKeys.remove(p.k); save()
-                                  }
-                              )
-                          } else {
-                              MetricCardWrapper(p, editLayoutMode,
-                                  onMoveLeft = {
-                                      val idx = visibleCockpitKeys.indexOf(p.k)
-                                      if (idx > 0) { visibleCockpitKeys.removeAt(idx); visibleCockpitKeys.add(idx - 1, p.k); save() }
-                                  },
-                                  onMoveRight = {
-                                      val idx = visibleCockpitKeys.indexOf(p.k)
-                                      if (idx < visibleCockpitKeys.size - 1) { visibleCockpitKeys.removeAt(idx); visibleCockpitKeys.add(idx + 1, p.k); save() }
-                                  },
-                                  onHide = {
-                                      visibleCockpitKeys.remove(p.k); save()
-                                  }
-                              )
-                          }
-                      }
+                      items(
+                          visibleList, key = { it.k },
+                          span = { p -> GridItemSpan(if ((cockpitSize[p.k] ?: 0) >= 1) maxLineSpan else 1) }
+                      ) { p -> TileBox(p) }
                   }
               }
 
               @Composable
-              private fun GaugeCardWrapper(p: P, editingMode: Boolean, onMoveLeft: () -> Unit, onMoveRight: () -> Unit, onHide: () -> Unit) {
-                  Box(Modifier.fillMaxWidth()) {
-                      Gauge(p, Modifier.fillMaxWidth())
-                      if (editingMode) {
-                          Surface(
-                              color = Bg.copy(alpha = 0.85f),
-                              shape = RoundedCornerShape(24.dp),
-                              modifier = Modifier.matchParentSize()
-                          ) {
-                              Row(
-                                  Modifier.fillMaxSize().padding(8.dp),
-                                  horizontalArrangement = Arrangement.Center,
-                                  verticalAlignment = Alignment.CenterVertically
-                              ) {
-                                  IconButton(onClick = onMoveLeft) { Icon(Icons.Rounded.ChevronLeft, contentDescription = "Mover Esquerda", tint = Pri) }
-                                  IconButton(onClick = onHide) { Icon(Icons.Rounded.Close, contentDescription = "Ocultar Card", tint = Err) }
-                                  IconButton(onClick = onMoveRight) { Icon(Icons.Rounded.ChevronRight, contentDescription = "Mover Direita", tint = Pri) }
-                              }
-                          }
+              private fun TileBox(p: P) {
+                  val sz = cockpitSize[p.k] ?: 0
+                  val gauge = gaugeStyle(p.k)
+                  fun moveBy(d: Int) {
+                      val i = visibleCockpitKeys.indexOf(p.k)
+                      val j = i + d
+                      if (i >= 0 && j >= 0 && j < visibleCockpitKeys.size) {
+                          visibleCockpitKeys.removeAt(i); visibleCockpitKeys.add(j, p.k); save()
                       }
                   }
-              }
-
-              @Composable
-              private fun MetricCardWrapper(p: P, editingMode: Boolean, onMoveLeft: () -> Unit, onMoveRight: () -> Unit, onHide: () -> Unit) {
                   Box(Modifier.fillMaxWidth()) {
-                      Metric(p)
-                      if (editingMode) {
+                      if (gauge) Gauge(p, Modifier.fillMaxWidth(), sz) else Metric(p, sz)
+                      if (editLayoutMode) {
                           Surface(
-                              color = Bg.copy(alpha = 0.85f),
-                              shape = RoundedCornerShape(18.dp),
+                              color = Bg.copy(alpha = 0.88f),
+                              shape = RoundedCornerShape(if (gauge) 24.dp else 18.dp),
                               modifier = Modifier.matchParentSize()
                           ) {
-                              Row(
+                              Column(
                                   Modifier.fillMaxSize().padding(4.dp),
-                                  horizontalArrangement = Arrangement.Center,
-                                  verticalAlignment = Alignment.CenterVertically
+                                  verticalArrangement = Arrangement.Center,
+                                  horizontalAlignment = Alignment.CenterHorizontally
                               ) {
-                                  IconButton(onClick = onMoveLeft, modifier = Modifier.size(32.dp)) { Icon(Icons.Rounded.ChevronLeft, contentDescription = null, tint = Pri) }
-                                  IconButton(onClick = onHide, modifier = Modifier.size(32.dp)) { Icon(Icons.Rounded.Close, contentDescription = null, tint = Err) }
-                                  IconButton(onClick = onMoveRight, modifier = Modifier.size(32.dp)) { Icon(Icons.Rounded.ChevronRight, contentDescription = null, tint = Pri) }
+                                  Row(verticalAlignment = Alignment.CenterVertically) {
+                                      IconButton(onClick = { moveBy(-1) }, modifier = Modifier.size(40.dp)) {
+                                          Icon(Icons.Rounded.ChevronLeft, contentDescription = "Mover antes", tint = Pri)
+                                      }
+                                      IconButton(onClick = { visibleCockpitKeys.remove(p.k); save() }, modifier = Modifier.size(40.dp)) {
+                                          Icon(Icons.Rounded.Close, contentDescription = "Ocultar", tint = Err)
+                                      }
+                                      IconButton(onClick = { moveBy(1) }, modifier = Modifier.size(40.dp)) {
+                                          Icon(Icons.Rounded.ChevronRight, contentDescription = "Mover depois", tint = Pri)
+                                      }
+                                  }
+                                  Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                                      TextButton(
+                                          onClick = { cockpitSize[p.k] = (sz + 1) % 3; save() },
+                                          contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+                                      ) { Text("Tam: " + listOf("P", "M", "G")[sz], color = Amb) }
+                                      TextButton(
+                                          onClick = { cockpitGauge[p.k] = !gauge; save() },
+                                          contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+                                      ) { Text(if (gauge) "Mostrador" else "Cartão", color = Pri) }
+                                  }
                               }
                           }
                       }
@@ -1492,7 +1571,7 @@ jobs:
               }
 
               @Composable
-              private fun Gauge(p: P, modifier: Modifier) {
+              private fun Gauge(p: P, modifier: Modifier, sz: Int = 0) {
                   val v = live[p.k]
                   val peak = mx[p.k]
                   val hit = tripped[p.k] == true
@@ -1507,7 +1586,7 @@ jobs:
                       onClick = { editing = p }, modifier = modifier, colors = cc(),
                       shape = RoundedCornerShape(24.dp), border = BorderStroke(1.dp, if (hit) Err else SurfBorder)
                   ) {
-                      Box(Modifier.fillMaxWidth().aspectRatio(1f), contentAlignment = Alignment.Center) {
+                      Box(Modifier.fillMaxWidth().aspectRatio(if (sz == 1) 1.7f else 1f), contentAlignment = Alignment.Center) {
                           Canvas(Modifier.fillMaxSize().padding(14.dp)) {
                               val w = 13.dp.toPx()
                               val s = Size(size.minDimension - w, size.minDimension - w)
@@ -1527,7 +1606,7 @@ jobs:
                           Column(horizontalAlignment = Alignment.CenterHorizontally) {
                               Text(
                                   if (v == null) "–" else fmt(p, v),
-                                  style = MaterialTheme.typography.headlineLarge.copy(
+                                  style = (if (sz == 2) MaterialTheme.typography.displayLarge else if (sz == 1) MaterialTheme.typography.displayMedium else MaterialTheme.typography.headlineLarge).copy(
                                       fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold
                                   ),
                                   color = if (hit) Err else Ink
@@ -1543,7 +1622,7 @@ jobs:
               }
 
               @Composable
-              private fun Metric(p: P) {
+              private fun Metric(p: P, sz: Int = 0) {
                   val v = live[p.k]
                   val hit = tripped[p.k] == true
                   val dimmed = fastPoll && !p.fast
@@ -1572,7 +1651,7 @@ jobs:
                           Row(verticalAlignment = Alignment.Bottom) {
                               Text(
                                   if (v == null) "–" else fmt(p, v),
-                                  style = MaterialTheme.typography.headlineSmall.copy(
+                                  style = (if (sz == 0) MaterialTheme.typography.headlineSmall else if (sz == 1) MaterialTheme.typography.headlineMedium else MaterialTheme.typography.displayMedium).copy(
                                       fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold
                                   ),
                                   color = if (hit) Err else if (dimmed) Mute else Ink
@@ -1597,22 +1676,33 @@ jobs:
 
               @Composable
               private fun PerformanceScreen() {
-                  val spd = live["spd"] ?: 0.0
+                  DisposableEffect(Unit) {
+                      if (hasLocPerm()) startGps()
+                      onDispose { if (!dragArmed && !dragRunning) stopGps() }
+                  }
+                  val spd = gpsKmh
                   Column(
                       Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
                       verticalArrangement = Arrangement.spacedBy(12.dp)
                   ) {
                       Card(colors = cc(), shape = RoundedCornerShape(22.dp), border = BorderStroke(1.dp, SurfBorder), modifier = Modifier.fillMaxWidth()) {
                           Column(Modifier.padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                              Text("VELOCIDADE ATUAL (OBD)", style = MaterialTheme.typography.labelMedium, color = Mute)
+                              Text("VELOCIDADE GPS", style = MaterialTheme.typography.labelMedium, color = Mute)
                               Text(
-                                  "${"%.0f".format(spd)} km/h",
+                                  if (spd == null) "-- km/h" else "${"%.1f".format(Locale.US, spd)} km/h",
                                   style = MaterialTheme.typography.displayMedium.copy(fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Black),
-                                  color = Pri
+                                  color = if (gpsFresh) Pri else Mute
                               )
+                              val gpsTxt = when {
+                                  gpsMsg.isNotEmpty() -> gpsMsg
+                                  !gpsOn -> "GPS desligado. Toque em Armar para ativar."
+                                  !gpsFresh -> "Aguardando sinal GPS (vá para céu aberto)…"
+                                  else -> "GPS OK"
+                              }
+                              Text(gpsTxt, style = MaterialTheme.typography.labelMedium, color = if (gpsFresh && gpsMsg.isEmpty()) Ok else Amb)
                               val statusTxt = when {
                                   dragRunning -> "CRONÔMETRO DISPARADO! ACELERE!"
-                                  dragArmed -> "ARMADO — Pare o carro e largue quando quiser"
+                                  dragArmed -> "ARMADO: pare o carro e largue quando quiser"
                                   else -> "Toque em Armar Cronômetro para iniciar a puxada"
                               }
                               Text(statusTxt, style = MaterialTheme.typography.bodyMedium, color = if (dragArmed) Ok else Mute)
@@ -1621,6 +1711,7 @@ jobs:
                                       onClick = {
                                           time0to60 = null; time0to100 = null; time40to120 = null
                                           dragRunning = false; dragArmed = true
+                                          ensureGps()
                                       }
                                   ) {
                                       Icon(Icons.Rounded.Flag, contentDescription = null)
@@ -1631,6 +1722,10 @@ jobs:
                                       OutlinedButton(onClick = { dragArmed = false; dragRunning = false }) { Text("Cancelar") }
                                   }
                               }
+                              Text(
+                                  "Tempos medidos pelo GPS do celular (interpolados entre as leituras de 1 Hz). Use céu aberto e pista reta.",
+                                  style = MaterialTheme.typography.labelSmall, color = Mute
+                              )
                           }
                       }
 
@@ -1689,7 +1784,7 @@ jobs:
                                       enabled = logData.isNotEmpty() && !isLogging,
                                       onClick = {
                                           val stamp = SimpleDateFormat("yyyyMMdd_HHmm", Locale.US).format(Date())
-                                          exportCsvLauncher.launch("DS3_THP_Log_$stamp.csv")
+                                          exportCsvLauncher.launch("MED17_Log_$stamp.csv")
                                       }
                                   ) {
                                       Icon(Icons.Rounded.Download, contentDescription = null)
@@ -1929,12 +2024,12 @@ jobs:
               }
 
               override fun onDestroy() {
+                  stopGps()
                   running = false; close()
                   super.onDestroy()
               }
           }
           EOF
-          mkdir -p app/src/main/res/values app/src/main/res/drawable app/src/main/res/mipmap-anydpi-v26
           cat > app/src/main/res/values/colors.xml <<'EOF'
           <?xml version="1.0" encoding="utf-8"?>
           <resources>
@@ -1972,5 +2067,5 @@ jobs:
         run: gradle assembleDebug --no-daemon
       - uses: actions/upload-artifact@v4
         with:
-          name: ds3-med17-apk
+          name: med17-dash-apk
           path: app/build/outputs/apk/debug/app-debug.apk
