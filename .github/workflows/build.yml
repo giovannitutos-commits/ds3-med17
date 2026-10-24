@@ -15,7 +15,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.7
-      - name: Gerar projeto Android nativo (MED17 Dash v7.4)
+      - name: Gerar projeto Android nativo (MED17 Dash v7.5)
         run: |
           mkdir -p app/src/main/java/br/local/ds3 app/src/main/res/values app/src/main/res/drawable app/src/main/res/mipmap-anydpi-v26
           cat > settings.gradle.kts <<'EOF'
@@ -46,8 +46,8 @@ jobs:
                   applicationId = "br.local.ds3"
                   minSdk = 26
                   targetSdk = 34
-                  versionCode = 13
-                  versionName = "7.4"
+                  versionCode = 14
+                  versionName = "7.5"
               }
               compileOptions {
                   sourceCompatibility = JavaVersion.VERSION_17
@@ -1984,6 +1984,7 @@ jobs:
                   var confirm by remember { mutableStateOf(false) }
                   val ok = state == 2 && sock != null
                   val dtcList = dtcs
+
                   Column(
                       Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
                       verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -2069,7 +2070,7 @@ jobs:
                                   Icon(Icons.Rounded.Info, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                                   Text("Sobre o MED17 Dash", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                               }
-                              Text("Versão do App: 7.4 (Build Pro)", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                              Text("Versão do App: 7.5 (Build Pro)", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
                               Text("Desenvolvido por: Giovanni Stocco", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
                               Text(
                                   "Software especializado de telemetria automotiva, leitura em tempo real via protocolo UDS (Modo 22) e OBD2 para centrais de injeção Bosch MED17.4.2 (motores THP / PSA).",
@@ -2078,19 +2079,22 @@ jobs:
                           }
                       }
                   }
-                  if (confirm) AlertDialog(
-                      containerColor = MaterialTheme.colorScheme.surfaceVariant,
-                      onDismissRequest = { confirm = false },
-                      title = { Text("Limpar Avarias (Modo 04)?") },
-                      text = { Text("Isso apagará a luz de injeção (MIL) e os parâmetros de Freeze Frame da MED17.4.2.") },
-                      confirmButton = {
-                          Button(
-                              colors = ButtonDefaults.buttonColors(containerColor = ErrCol),
-                              onClick = { confirm = false; clearDtc() }
-                          ) { Text("Apagar Tudo") }
-                      },
-                      dismissButton = { TextButton(onClick = { confirm = false }) { Text("Cancelar") } }
-                  )
+
+                  if (confirm) {
+                      AlertDialog(
+                          containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                          onDismissRequest = { confirm = false },
+                          title = { Text("Limpar Avarias (Modo 04)?") },
+                          text = { Text("Isso apagará a luz de injeção (MIL) e os parâmetros de Freeze Frame da MED17.4.2.") },
+                          confirmButton = {
+                              Button(
+                                  colors = ButtonDefaults.buttonColors(containerColor = ErrCol),
+                                  onClick = { confirm = false; clearDtc() }
+                              ) { Text("Apagar Tudo") }
+                          },
+                          dismissButton = { TextButton(onClick = { confirm = false }) { Text("Cancelar") } }
+                      )
+                  }
               }
 
               override fun onDestroy() {
