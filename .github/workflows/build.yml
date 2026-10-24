@@ -15,7 +15,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.7
-      - name: Gerar projeto Android nativo (MED17 Dash v8.2)
+      - name: Gerar projeto Android nativo (MED17 Dash v8.3)
         run: |
           mkdir -p app/src/main/java/br/local/ds3 app/src/main/res/values app/src/main/res/drawable app/src/main/res/mipmap-anydpi-v26
           cat > settings.gradle.kts <<'EOF'
@@ -46,8 +46,8 @@ jobs:
                   applicationId = "br.local.ds3"
                   minSdk = 26
                   targetSdk = 34
-                  versionCode = 21
-                  versionName = "8.2"
+                  versionCode = 22
+                  versionName = "8.3"
               }
               compileOptions {
                   sourceCompatibility = JavaVersion.VERSION_17
@@ -959,8 +959,8 @@ jobs:
                               Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                   Text("MED17", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Black, color = MaterialTheme.colorScheme.onBackground)
                                   Surface(
-                                      color = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f), shape = RoundedCornerShape(6.dp),
-                                      border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.4f))
+                                      color = MaterialTheme.colorScheme.primary.copy(0.14f), shape = RoundedCornerShape(6.dp),
+                                      border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(0.4f))
                                   ) {
                                       Text(
                                           "4.2 DASH", Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
@@ -992,7 +992,7 @@ jobs:
                           }
                           Surface(
                               shape = RoundedCornerShape(50), color = MaterialTheme.colorScheme.surfaceVariant,
-                              border = BorderStroke(1.dp, dot.copy(alpha = 0.4f))
+                              border = BorderStroke(1.dp, dot.copy(0.4f))
                           ) {
                               Row(Modifier.padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                                   Box(Modifier.size(8.dp).clip(CircleShape).background(dot))
@@ -1054,7 +1054,7 @@ jobs:
                                       icon = { Icon(ic, contentDescription = n) },
                                       label = { Text(n, maxLines = 1) },
                                       colors = NavigationBarItemDefaults.colors(
-                                          indicatorColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.16f),
+                                          indicatorColor = MaterialTheme.colorScheme.primary.copy(0.16f),
                                           selectedIconColor = MaterialTheme.colorScheme.primary, selectedTextColor = MaterialTheme.colorScheme.primary,
                                           unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant, unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
                                       )
@@ -2041,7 +2041,7 @@ jobs:
                                   Icon(Icons.Rounded.Info, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                                   Text("Sobre o MED17 Dash", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                               }
-                              Text("Versão do App: 8.2 (Build Pro)", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                              Text("Versão do App: 8.3 (Build Pro)", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
                               Text("Desenvolvido por: Giovanni Stocco", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
                               Text(
                                   "Software especializado de telemetria automotiva, leitura em tempo real via protocolo UDS (Modo 22) e OBD2 para centrais de injeção Bosch MED17.4.2 (motores THP / PSA).",
