@@ -15,7 +15,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.7
-      - name: Gerar projeto Android nativo (MED17 Dash v7.9)
+      - name: Gerar projeto Android nativo (MED17 Dash v8.0)
         run: |
           mkdir -p app/src/main/java/br/local/ds3 app/src/main/res/values app/src/main/res/drawable app/src/main/res/mipmap-anydpi-v26
           cat > settings.gradle.kts <<'EOF'
@@ -46,8 +46,8 @@ jobs:
                   applicationId = "br.local.ds3"
                   minSdk = 26
                   targetSdk = 34
-                  versionCode = 18
-                  versionName = "7.9"
+                  versionCode = 19
+                  versionName = "8.0"
               }
               compileOptions {
                   sourceCompatibility = JavaVersion.VERSION_17
@@ -935,7 +935,7 @@ jobs:
                       error = ErrCol,
                       errorContainer = Color(0xFF421018),
                       onErrorContainer = Color(0xFFFFDAD6),
-                      primaryContainer = primaryCol.copy(alpha = 0.25f),
+                      primaryContainer = primaryCol,
                       onPrimaryContainer = textCol,
                       secondaryContainer = surf2Col,
                       onSecondaryContainer = textCol,
@@ -2041,7 +2041,7 @@ jobs:
                                   Icon(Icons.Rounded.Info, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                                   Text("Sobre o MED17 Dash", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                               }
-                              Text("Versão do App: 7.9 (Build Pro)", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                              Text("Versão do App: 8.0 (Build Pro)", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
                               Text("Desenvolvido por: Giovanni Stocco", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
                               Text(
                                   "Software especializado de telemetria automotiva, leitura em tempo real via protocolo UDS (Modo 22) e OBD2 para centrais de injeção Bosch MED17.4.2 (motores THP / PSA).",
@@ -2070,30 +2070,34 @@ jobs:
 
               @Composable
               private fun DtcSection(ok: Boolean, dtcList: List<String>?, thpMap: Map<String, String>) {
-                  if (dtcList == null) {
-                      Text(
-                          if (ok) "Toque em Ler DTCs para varrer a memória de avarias."
-                          else "Conecte ao ELM327 com a ignição ligada para ler códigos da injeção.",
-                          color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(8.dp)
-                      )
-                  } else if (dtcList.isEmpty()) {
-                      Card(colors = cc(MaterialTheme.colorScheme.surfaceVariant), shape = RoundedCornerShape(18.dp), border = BorderStroke(1.dp, OkCol.copy(alpha = 0.5f)), modifier = Modifier.fillMaxWidth()) {
-                          Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                              Icon(Icons.Rounded.CheckCircle, contentDescription = null, tint = OkCol)
-                              Spacer(Modifier.width(10.dp))
-                              Text("Nenhuma falha registrada na MED17.4.2.", color = OkCol, fontWeight = FontWeight.SemiBold)
+                  when {
+                      dtcList == null -> {
+                          Text(
+                              if (ok) "Toque em Ler DTCs para varrer a memória de avarias."
+                              else "Conecte ao ELM327 com a ignição ligada para ler códigos da injeção.",
+                              color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(8.dp)
+                          )
+                      }
+                      dtcList.isEmpty() -> {
+                          Card(colors = cc(MaterialTheme.colorScheme.surfaceVariant), shape = RoundedCornerShape(18.dp), border = BorderStroke(1.dp, OkCol.copy(alpha = 0.5f)), modifier = Modifier.fillMaxWidth()) {
+                              Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                                  Icon(Icons.Rounded.CheckCircle, contentDescription = null, tint = OkCol)
+                                  Spacer(Modifier.width(10.dp))
+                                  Text("Nenhuma falha registrada na MED17.4.2.", color = OkCol, fontWeight = FontWeight.SemiBold)
+                              }
                           }
                       }
-                  } else {
-                      Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                          dtcList.forEach { code ->
-                              Card(colors = cc(Color(0xFF381117)), shape = RoundedCornerShape(18.dp), border = BorderStroke(1.dp, ErrCol), modifier = Modifier.fillMaxWidth()) {
-                                  Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                      Text(code, style = MaterialTheme.typography.titleLarge.copy(fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold), color = ErrCol)
-                                      Text(
-                                          thpMap[code] ?: "Código de falha OBD2 genérico ou específico PSA.",
-                                          style = MaterialTheme.typography.bodyMedium, color = Color(0xFFFFDAD6)
-                                      )
+                      else -> {
+                          Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                              dtcList.forEach { code ->
+                                  Card(colors = cc(Color(0xFF381117)), shape = RoundedCornerShape(18.dp), border = BorderStroke(1.dp, ErrCol), modifier = Modifier.fillMaxWidth()) {
+                                      Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                          Text(code, style = MaterialTheme.typography.titleLarge.copy(fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold), color = ErrCol)
+                                          Text(
+                                              thpMap[code] ?: "Código de falha OBD2 genérico ou específico PSA.",
+                                              style = MaterialTheme.typography.bodyMedium, color = Color(0xFFFFDAD6)
+                                          )
+                                      }
                                   }
                               }
                           }
