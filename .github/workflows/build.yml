@@ -15,7 +15,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.7
-      - name: Gerar projeto Android nativo (MED17 Dash v7.2)
+      - name: Gerar projeto Android nativo (MED17 Dash v7.3)
         run: |
           mkdir -p app/src/main/java/br/local/ds3 app/src/main/res/values app/src/main/res/drawable app/src/main/res/mipmap-anydpi-v26
           cat > settings.gradle.kts <<'EOF'
@@ -46,8 +46,8 @@ jobs:
                   applicationId = "br.local.ds3"
                   minSdk = 26
                   targetSdk = 34
-                  versionCode = 11
-                  versionName = "7.2"
+                  versionCode = 12
+                  versionName = "7.3"
               }
               compileOptions {
                   sourceCompatibility = JavaVersion.VERSION_17
@@ -1979,10 +1979,13 @@ jobs:
               }
 
               @Composable
-              private fun EcuAndAboutScreen() {
-                  var confirm by remember { mutableStateOf(false) }
-                  val ok = state == 2 && sock != null
-                  val dtcList = dtcs
+              private fun AboutDialogContent(
+                  ok: Boolean,
+                  dtcList: List<String>?,
+                  thpMap: Map<String, String>,
+                  onReadDtc: () -> Unit,
+                  onClearDtcConfirm: () -> Unit
+              ) {
                   Column(
                       Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
                       verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -2018,12 +2021,12 @@ jobs:
                           Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                               Text("Diagnóstico Bosch MED17.4.2", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                               Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                  Button(enabled = ok, onClick = { readDtc() }) {
+                                  Button(enabled = ok, onClick = onReadDtc) {
                                       Icon(Icons.Rounded.Search, contentDescription = null)
                                       Spacer(Modifier.width(6.dp))
                                       Text("Ler DTCs")
                                   }
-                                  OutlinedButton(enabled = ok, onClick = { confirm = true }) {
+                                  OutlinedButton(enabled = ok, onClick = onClearDtcConfirm) {
                                       Icon(Icons.Rounded.DeleteSweep, contentDescription = null)
                                       Spacer(Modifier.width(6.dp))
                                       Text("Limpar ECU")
@@ -2052,7 +2055,7 @@ jobs:
                                           Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                               Text(code, style = MaterialTheme.typography.titleLarge.copy(fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold), color = ErrCol)
                                               Text(
-                                                  thpDtcMap[code] ?: "Código de falha OBD2 genérico ou específico PSA.",
+                                                  thpMap[code] ?: "Código de falha OBD2 genérico ou específico PSA.",
                                                   style = MaterialTheme.typography.bodyMedium, color = Color(0xFFFFDAD6)
                                               )
                                           }
@@ -2068,7 +2071,7 @@ jobs:
                                   Icon(Icons.Rounded.Info, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                                   Text("Sobre o MED17 Dash", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                               }
-                              Text("Versão do App: 7.2 (Build Pro)", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                              Text("Versão do App: 7.3 (Build Pro)", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
                               Text("Desenvolvido por: Giovanni Stocco", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
                               Text(
                                   "Software especializado de telemetria automotiva, leitura em tempo real via protocolo UDS (Modo 22) e OBD2 para centrais de injeção Bosch MED17.4.2 (motores THP / PSA).",
@@ -2077,6 +2080,19 @@ jobs:
                           }
                       }
                   }
+              }
+
+              @Composable
+              private fun EcuAndAboutScreen() {
+                  var confirm by remember { mutableStateOf(false) }
+                  val ok = state == 2 && sock != null
+                  AboutDialogContent(
+                      ok = ok,
+                      dtcList = dtcs,
+                      thpMap = thpDtcMap,
+                      onReadDtc = { readDtc() },
+                      onClearDtcConfirm = { confirm = true }
+                  )
                   if (confirm) AlertDialog(
                       containerColor = MaterialTheme.colorScheme.surfaceVariant,
                       onDismissRequest = { confirm = false },
