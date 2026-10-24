@@ -15,7 +15,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.7
-      - name: Gerar projeto Android nativo (MED17 Dash v8.1)
+      - name: Gerar projeto Android nativo (MED17 Dash v8.2)
         run: |
           mkdir -p app/src/main/java/br/local/ds3 app/src/main/res/values app/src/main/res/drawable app/src/main/res/mipmap-anydpi-v26
           cat > settings.gradle.kts <<'EOF'
@@ -46,8 +46,8 @@ jobs:
                   applicationId = "br.local.ds3"
                   minSdk = 26
                   targetSdk = 34
-                  versionCode = 20
-                  versionName = "8.1"
+                  versionCode = 21
+                  versionName = "8.2"
               }
               compileOptions {
                   sourceCompatibility = JavaVersion.VERSION_17
@@ -2041,7 +2041,7 @@ jobs:
                                   Icon(Icons.Rounded.Info, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                                   Text("Sobre o MED17 Dash", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                               }
-                              Text("Versão do App: 8.1 (Build Pro)", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                              Text("Versão do App: 8.2 (Build Pro)", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
                               Text("Desenvolvido por: Giovanni Stocco", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
                               Text(
                                   "Software especializado de telemetria automotiva, leitura em tempo real via protocolo UDS (Modo 22) e OBD2 para centrais de injeção Bosch MED17.4.2 (motores THP / PSA).",
@@ -2086,7 +2086,7 @@ jobs:
                       }
                   } else {
                       Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                          dtcList.forEach { code ->
+                          for (code in dtcList) {
                               Card(colors = cc(Color(0xFF381117)), shape = RoundedCornerShape(18.dp), border = BorderStroke(1.dp, ErrCol), modifier = Modifier.fillMaxWidth()) {
                                   Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                       Text(code, style = MaterialTheme.typography.titleLarge.copy(fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold), color = ErrCol)
