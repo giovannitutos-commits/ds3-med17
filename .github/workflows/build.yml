@@ -15,7 +15,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.7
-      - name: Gerar projeto Android nativo (Kotlin + Material 3 + Custom UDS PIDs)
+      - name: Gerar projeto Android nativo (Kotlin + Material 3 + Custom Layout Cockpit)
         run: |
           mkdir -p app/src/main/java/br/local/ds3
           cat > settings.gradle.kts <<'EOF'
@@ -46,8 +46,8 @@ jobs:
                   applicationId = "br.local.ds3"
                   minSdk = 26
                   targetSdk = 34
-                  versionCode = 6
-                  versionName = "4.5-CUSTOM-UDS"
+                  versionCode = 7
+                  versionName = "5.0-CUSTOM-COCKPIT"
               }
               compileOptions {
                   sourceCompatibility = JavaVersion.VERSION_17
@@ -169,8 +169,7 @@ jobs:
 
           data class CustomPidSpec(
               val key: String, val name: String, val unit: String, val cmd: String,
-              val mode: Int, // 0: 8-bit A, 1: 16-bit AB, 2: 16-bit CD, 3: 16-bit Signed AB
-              val mul: Double, val add: Double, val dec: Int,
+              val mode: Int, val mul: Double, val add: Double, val dec: Int,
               val lo: Double, val hi: Double, val fast: Boolean, val feedBoost: Boolean
           ) {
               fun toP(): P = P(key, name, unit, cmd, dec, lo, hi, fast, true, feedBoost) { b ->
@@ -241,6 +240,10 @@ jobs:
               private fun activePids(): List<P> = basePids + customSpecs.map { it.toP() }
               private fun allParams(): List<P> = listOf(boostP, afrP) + activePids()
 
+              // Layout customizável do Cockpit (Keys visíveis)
+              private val visibleCockpitKeys = mutableStateListOf<String>()
+              private var editLayoutMode by mutableStateOf(false)
+
               private val soundNames = listOf("Bipe Curto", "Bipe Duplo", "Alerta Tático", "Alarme Contínuo", "Som Personalizado")
 
               private val thpDtcMap = mapOf(
@@ -287,7 +290,6 @@ jobs:
               private var devs by mutableStateOf<List<BluetoothDevice>?>(null)
               private var dtcs by mutableStateOf<List<String>?>(null)
 
-              // Terminal UDS Modal State
               private var showTerm by mutableStateOf(false)
               private val termLogs = mutableStateListOf<TermLine>()
               private var termBusy by mutableStateOf(false)
@@ -299,12 +301,10 @@ jobs:
               private var vibe by mutableStateOf(true)
               private var hz by mutableStateOf(0.0)
 
-              // Datalogger state
               private var isLogging by mutableStateOf(false)
               private var logStartMs = 0L
               private val logData = mutableStateListOf<LogRow>()
 
-              // Performance Timer state
               private var dragArmed by mutableStateOf(false)
               private var dragRunning by mutableStateOf(false)
               private var dragStartMs = 0L
@@ -389,6 +389,19 @@ jobs:
                       }
                   }
 
+                  visibleCockpitKeys.clear()
+                  val savedKeys = sp.getString("visible_cockpit_keys", null)
+                  if (savedKeys != null) {
+                      runCatching {
+                          val arr = JSONArray(savedKeys)
+                          for (i in 0 until arr.length()) visibleCockpitKeys.add(arr.getString(i))
+                      }
+                  }
+                  if (visibleCockpitKeys.isEmpty()) {
+                      // Padrão inicial com todos os principais parâmetros visíveis
+                      visibleCockpitKeys.addAll(listOf("rpm", "boost", "rail", "afr", "map16", "map_tgt", "adv", "tps", "spd", "iat", "ect", "cat", "st", "lt", "ld", "maf", "vb"))
+                  }
+
                   for (p in allParams()) sp.getString("al_" + p.k, null)?.split(",")?.let {
                       if (it.size == 3) alerts[p.k] = Al(it[0] == "1", it[1] == "1", it[2].toDoubleOrNull() ?: 0.0)
                   }
@@ -403,15 +416,19 @@ jobs:
                       .putInt("cool", cool).putBoolean("vibe", vibe).putInt("shiftRpm", shiftRpm)
                   alerts.forEach { (k, a) -> e.putString("al_$k", "${if (a.on) 1 else 0},${if (a.above) 1 else 0},${a.v}") }
 
-                  val arr = JSONArray()
+                  val arrCust = JSONArray()
                   customSpecs.forEach { s ->
                       val o = JSONObject()
                       o.put("key", s.key).put("name", s.name).put("unit", s.unit).put("cmd", s.cmd)
                           .put("mode", s.mode).put("mul", s.mul).put("add", s.add).put("dec", s.dec)
                           .put("lo", s.lo).put("hi", s.hi).put("fast", s.fast).put("feedBoost", s.feedBoost)
-                      arr.put(o)
+                      arrCust.put(o)
                   }
-                  e.putString("custom_pids", arr.toString())
+                  e.putString("custom_pids", arrCust.toString())
+
+                  val arrKeys = JSONArray()
+                  visibleCockpitKeys.forEach { arrKeys.put(it) }
+                  e.putString("visible_cockpit_keys", arrKeys.toString())
                   e.apply()
               }
 
@@ -964,7 +981,7 @@ jobs:
                   var name by remember { mutableStateOf("MAP Coletor UDS") }
                   var cmd by remember { mutableStateOf(prefillCmd) }
                   var unit by remember { mutableStateOf("kPa") }
-                  var mode by remember { mutableStateOf(1) } // 1 = 16-bit AB
+                  var mode by remember { mutableStateOf(1) }
                   var mulTxt by remember { mutableStateOf("0.1") }
                   var addTxt by remember { mutableStateOf("0.0") }
                   var decTxt by remember { mutableStateOf("1") }
@@ -1081,8 +1098,9 @@ jobs:
                                           customSpecs[i] = customSpecs[i].copy(feedBoost = false)
                                       }
                                   }
+                                  val newKey = "usr_" + System.currentTimeMillis()
                                   val spec = CustomPidSpec(
-                                      key = "usr_" + System.currentTimeMillis(),
+                                      key = newKey,
                                       name = name.trim(),
                                       unit = unit.trim(),
                                       cmd = cleanHex,
@@ -1096,7 +1114,8 @@ jobs:
                                       feedBoost = feedBoost
                                   )
                                   customSpecs.add(0, spec)
-                                  fails.remove(spec.key)
+                                  if (!visibleCockpitKeys.contains(newKey)) visibleCockpitKeys.add(newKey)
+                                  fails.remove(newKey)
                                   save()
                                   showAddPid = false
                               }
@@ -1240,10 +1259,10 @@ jobs:
 
               @Composable
               private fun Panel() {
-                  val currentAll = allParams()
-                  val hits = currentAll.filter { tripped[it.k] == true }
-                  val customCards = customSpecs.map { it.toP() }
-                  val gridItems = customCards + listOf(basePids[4], afrP, basePids[1], basePids[2]) + basePids.drop(5)
+                  val allMap = allParams().associateBy { it.k }
+                  val visibleList = visibleCockpitKeys.mapNotNull { allMap[it] }
+                  val hiddenList = allParams().filter { !visibleCockpitKeys.contains(it.k) }
+                  val hits = allParams().filter { tripped[it.k] == true }
 
                   LazyVerticalGrid(
                       columns = GridCells.Fixed(2), modifier = Modifier.fillMaxSize(),
@@ -1251,6 +1270,7 @@ jobs:
                       horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)
                   ) {
                       item(span = { GridItemSpan(maxLineSpan) }) { ConnCard() }
+
                       if (hits.isNotEmpty()) item(span = { GridItemSpan(maxLineSpan) }) {
                           Card(
                               colors = cc(Color(0xFF421018)), shape = RoundedCornerShape(18.dp),
@@ -1266,13 +1286,133 @@ jobs:
                               }
                           }
                       }
+
+                      // Barra de controles de edição do layout
                       item(span = { GridItemSpan(maxLineSpan) }) {
-                          Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                              Gauge(basePids[0], Modifier.weight(1f))
-                              Gauge(boostP, Modifier.weight(1f))
+                          Card(colors = cc(Surf2), shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth()) {
+                              Row(
+                                  Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                  verticalAlignment = Alignment.CenterVertically,
+                                  horizontalArrangement = Arrangement.SpaceBetween
+                              ) {
+                                  Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                      Icon(Icons.Rounded.DashboardCustomize, contentDescription = null, tint = Pri, modifier = Modifier.size(18.dp))
+                                      Text("Cockpit (${visibleList.size} ativos)", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+                                  }
+                                  TextButton(
+                                      onClick = { editLayoutMode = !editLayoutMode },
+                                      contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                                  ) {
+                                      Text(if (editLayoutMode) "Concluir Edição" else "⚙️ Organizar Tela", color = if (editLayoutMode) Ok else Pri, fontWeight = FontWeight.Bold)
+                                  }
+                              }
                           }
                       }
-                      items(gridItems, key = { it.k }) { Metric(it) }
+
+                      // Se houver parâmetros ocultos e em modo de edição, exibe chips para adicionar de volta
+                      if (editLayoutMode && hiddenList.isNotEmpty()) {
+                          item(span = { GridItemSpan(maxLineSpan) }) {
+                              Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                  Text("Parâmetros disponíveis para adicionar:", style = MaterialTheme.typography.labelMedium, color = Amb)
+                                  Row(
+                                      Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                                      horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                  ) {
+                                      hiddenList.forEach { hid ->
+                                          AssistChip(
+                                              onClick = {
+                                                  visibleCockpitKeys.add(hid.k)
+                                                  save()
+                                              },
+                                              label = { Text("+ ${hid.n}") }
+                                          )
+                                      }
+                                  }
+                              }
+                          }
+                      }
+
+                      // Renderiza todos os gauges circulares fixos no topo se estiverem visíveis, ou métricas padrão
+                      items(visibleList, key = { it.k }) { p ->
+                          val isCircular = p.k == "rpm" || p.k == "boost"
+                          if (isCircular) {
+                              GaugeCardWrapper(p, editLayoutMode,
+                                  onMoveLeft = {
+                                      val idx = visibleCockpitKeys.indexOf(p.k)
+                                      if (idx > 0) { visibleCockpitKeys.removeAt(idx); visibleCockpitKeys.add(idx - 1, p.k); save() }
+                                  },
+                                  onMoveRight = {
+                                      val idx = visibleCockpitKeys.indexOf(p.k)
+                                      if (idx < visibleCockpitKeys.size - 1) { visibleCockpitKeys.removeAt(idx); visibleCockpitKeys.add(idx + 1, p.k); save() }
+                                  },
+                                  onHide = {
+                                      visibleCockpitKeys.remove(p.k); save()
+                                  }
+                              )
+                          } else {
+                              MetricCardWrapper(p, editLayoutMode,
+                                  onMoveLeft = {
+                                      val idx = visibleCockpitKeys.indexOf(p.k)
+                                      if (idx > 0) { visibleCockpitKeys.removeAt(idx); visibleCockpitKeys.add(idx - 1, p.k); save() }
+                                  },
+                                  onMoveRight = {
+                                      val idx = visibleCockpitKeys.indexOf(p.k)
+                                      if (idx < visibleCockpitKeys.size - 1) { visibleCockpitKeys.removeAt(idx); visibleCockpitKeys.add(idx + 1, p.k); save() }
+                                  },
+                                  onHide = {
+                                      visibleCockpitKeys.remove(p.k); save()
+                                  }
+                              )
+                          }
+                      }
+                  }
+              }
+
+              @Composable
+              private fun GaugeCardWrapper(p: P, editingMode: Boolean, onMoveLeft: () -> Unit, onMoveRight: () -> Unit, onHide: () -> Unit) {
+                  Box(Modifier.fillMaxWidth()) {
+                      Gauge(p, Modifier.fillMaxWidth())
+                      if (editingMode) {
+                          Surface(
+                              color = Bg.copy(alpha = 0.85f),
+                              shape = RoundedCornerShape(24.dp),
+                              modifier = Modifier.matchParentSize()
+                          ) {
+                              Row(
+                                  Modifier.fillMaxSize().padding(8.dp),
+                                  horizontalArrangement = Arrangement.Center,
+                                  verticalAlignment = Alignment.CenterVertically
+                              ) {
+                                  IconButton(onClick = onMoveLeft) { Icon(Icons.Rounded.ChevronLeft, contentDescription = "Mover Esquerda", tint = Pri) }
+                                  IconButton(onClick = onHide) { Icon(Icons.Rounded.Close, contentDescription = "Ocultar Card", tint = Err) }
+                                  IconButton(onClick = onMoveRight) { Icon(Icons.Rounded.ChevronRight, contentDescription = "Mover Direita", tint = Pri) }
+                              }
+                          }
+                      }
+                  }
+              }
+
+              @Composable
+              private fun MetricCardWrapper(p: P, editingMode: Boolean, onMoveLeft: () -> Unit, onMoveRight: () -> Unit, onHide: () -> Unit) {
+                  Box(Modifier.fillMaxWidth()) {
+                      Metric(p)
+                      if (editingMode) {
+                          Surface(
+                              color = Bg.copy(alpha = 0.85f),
+                              shape = RoundedCornerShape(18.dp),
+                              modifier = Modifier.matchParentSize()
+                          ) {
+                              Row(
+                                  Modifier.fillMaxSize().padding(4.dp),
+                                  horizontalArrangement = Arrangement.Center,
+                                  verticalAlignment = Alignment.CenterVertically
+                              ) {
+                                  IconButton(onClick = onMoveLeft, modifier = Modifier.size(32.dp)) { Icon(Icons.Rounded.ChevronLeft, contentDescription = null, tint = Pri) }
+                                  IconButton(onClick = onHide, modifier = Modifier.size(32.dp)) { Icon(Icons.Rounded.Close, contentDescription = null, tint = Err) }
+                                  IconButton(onClick = onMoveRight, modifier = Modifier.size(32.dp)) { Icon(Icons.Rounded.ChevronRight, contentDescription = null, tint = Pri) }
+                              }
+                          }
+                      }
                   }
               }
 
@@ -1697,6 +1837,7 @@ jobs:
                                   OutlinedButton(
                                       onClick = {
                                           customSpecs.removeAll { it.key == p.k }
+                                          visibleCockpitKeys.remove(p.k)
                                           alerts.remove(p.k); live.remove(p.k)
                                           save(); editing = null
                                       },
