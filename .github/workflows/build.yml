@@ -15,7 +15,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.7
-      - name: Gerar projeto Android nativo (Kotlin + Material 3 + UDS Terminal)
+      - name: Gerar projeto Android nativo (Kotlin + Material 3 + Custom UDS PIDs)
         run: |
           mkdir -p app/src/main/java/br/local/ds3
           cat > settings.gradle.kts <<'EOF'
@@ -46,8 +46,8 @@ jobs:
                   applicationId = "br.local.ds3"
                   minSdk = 26
                   targetSdk = 34
-                  versionCode = 5
-                  versionName = "4.2-UDS"
+                  versionCode = 6
+                  versionName = "4.5-CUSTOM-UDS"
               }
               compileOptions {
                   sourceCompatibility = JavaVersion.VERSION_17
@@ -149,6 +149,8 @@ jobs:
           import androidx.compose.ui.text.style.TextOverflow
           import androidx.compose.ui.unit.dp
           import androidx.compose.ui.unit.sp
+          import org.json.JSONArray
+          import org.json.JSONObject
           import java.io.InputStream
           import java.io.OutputStream
           import java.text.SimpleDateFormat
@@ -161,8 +163,31 @@ jobs:
           class P(
               val k: String, val n: String, val u: String, val c: String,
               val d: Int, val lo: Double, val hi: Double, val fast: Boolean = false,
+              val custom: Boolean = false, val feedBoost: Boolean = false,
               val f: (IntArray) -> Double
           )
+
+          data class CustomPidSpec(
+              val key: String, val name: String, val unit: String, val cmd: String,
+              val mode: Int, // 0: 8-bit A, 1: 16-bit AB, 2: 16-bit CD, 3: 16-bit Signed AB
+              val mul: Double, val add: Double, val dec: Int,
+              val lo: Double, val hi: Double, val fast: Boolean, val feedBoost: Boolean
+          ) {
+              fun toP(): P = P(key, name, unit, cmd, dec, lo, hi, fast, true, feedBoost) { b ->
+                  val raw = when (mode) {
+                      0 -> b.getOrElse(0) { 0 }.toDouble()
+                      1 -> if (b.size >= 2) (b[0] * 256 + b[1]).toDouble() else b.getOrElse(0) { 0 }.toDouble()
+                      2 -> if (b.size >= 4) (b[2] * 256 + b[3]).toDouble() else if (b.size >= 2) (b[0] * 256 + b[1]).toDouble() else 0.0
+                      3 -> {
+                          val v = if (b.size >= 2) (b[0] * 256 + b[1]) else b.getOrElse(0) { 0 }
+                          (if (v >= 32768) v - 65536 else v).toDouble()
+                      }
+                      else -> 0.0
+                  }
+                  raw * mul + add
+              }
+          }
+
           data class Al(val on: Boolean, val above: Boolean, val v: Double)
           data class LogRow(
               val tMs: Long, val rpm: Double, val boost: Double, val rail: Double,
@@ -187,7 +212,7 @@ jobs:
               private val boostP = P("boost", "Boost Relativo", "bar", "", 2, -0.8, 2.5, true) { 0.0 }
               private val afrP = P("afr", "Mistura AFR", ":1", "", 1, 10.0, 18.0, true) { 0.0 }
 
-              private val pids = listOf(
+              private val basePids = listOf(
                   P("rpm", "Rotação", "rpm", "010C", 0, 0.0, 7000.0, true) { (it[0] * 256 + it[1]) / 4.0 },
                   P("map16", "MAP (16-bit UDS)", "kPa", "220170", 1, 20.0, 350.0, true) {
                       if (it.size >= 4) ((it[2] * 256 + it[3]) * 0.03125)
@@ -211,7 +236,11 @@ jobs:
                   P("maf", "Fluxo MAF", "g/s", "0110", 1, 0.0, 260.0, false) { (it[0] * 256 + it[1]) / 100.0 },
                   P("vb", "Tensão ECU", "V", "0142", 2, 11.0, 15.5, false) { (it[0] * 256 + it[1]) / 1000.0 }
               )
-              private val allP = listOf(boostP, afrP) + pids
+
+              private val customSpecs = mutableStateListOf<CustomPidSpec>()
+              private fun activePids(): List<P> = basePids + customSpecs.map { it.toP() }
+              private fun allParams(): List<P> = listOf(boostP, afrP) + activePids()
+
               private val soundNames = listOf("Bipe Curto", "Bipe Duplo", "Alerta Tático", "Alarme Contínuo", "Som Personalizado")
 
               private val thpDtcMap = mapOf(
@@ -253,6 +282,8 @@ jobs:
               private var fastPoll by mutableStateOf(false)
               private var shiftRpm by mutableStateOf(6200)
               private var editing by mutableStateOf<P?>(null)
+              private var showAddPid by mutableStateOf(false)
+              private var prefillCmd by mutableStateOf("22 D4 0A")
               private var devs by mutableStateOf<List<BluetoothDevice>?>(null)
               private var dtcs by mutableStateOf<List<String>?>(null)
 
@@ -331,7 +362,34 @@ jobs:
                   vibe = sp.getBoolean("vibe", true)
                   shiftRpm = sp.getInt("shiftRpm", 6200)
                   lastAddr = sp.getString("addr", null)
-                  for (p in allP) sp.getString("al_" + p.k, null)?.split(",")?.let {
+
+                  customSpecs.clear()
+                  sp.getString("custom_pids", null)?.let { jsonStr ->
+                      runCatching {
+                          val arr = JSONArray(jsonStr)
+                          for (i in 0 until arr.length()) {
+                              val o = arr.getJSONObject(i)
+                              customSpecs.add(
+                                  CustomPidSpec(
+                                      key = o.getString("key"),
+                                      name = o.getString("name"),
+                                      unit = o.getString("unit"),
+                                      cmd = o.getString("cmd"),
+                                      mode = o.optInt("mode", 1),
+                                      mul = o.optDouble("mul", 1.0),
+                                      add = o.optDouble("add", 0.0),
+                                      dec = o.optInt("dec", 1),
+                                      lo = o.optDouble("lo", 0.0),
+                                      hi = o.optDouble("hi", 100.0),
+                                      fast = o.optBoolean("fast", true),
+                                      feedBoost = o.optBoolean("feedBoost", false)
+                                  )
+                              )
+                          }
+                      }
+                  }
+
+                  for (p in allParams()) sp.getString("al_" + p.k, null)?.split(",")?.let {
                       if (it.size == 3) alerts[p.k] = Al(it[0] == "1", it[1] == "1", it[2].toDoubleOrNull() ?: 0.0)
                   }
                   if (alerts["ect"] == null) alerts["ect"] = Al(true, true, 105.0)
@@ -344,6 +402,16 @@ jobs:
                   e.putBoolean("master", master).putInt("snd", snd).putString("uri", uri)
                       .putInt("cool", cool).putBoolean("vibe", vibe).putInt("shiftRpm", shiftRpm)
                   alerts.forEach { (k, a) -> e.putString("al_$k", "${if (a.on) 1 else 0},${if (a.above) 1 else 0},${a.v}") }
+
+                  val arr = JSONArray()
+                  customSpecs.forEach { s ->
+                      val o = JSONObject()
+                      o.put("key", s.key).put("name", s.name).put("unit", s.unit).put("cmd", s.cmd)
+                          .put("mode", s.mode).put("mul", s.mul).put("add", s.add).put("dec", s.dec)
+                          .put("lo", s.lo).put("hi", s.hi).put("fast", s.fast).put("feedBoost", s.feedBoost)
+                      arr.put(o)
+                  }
+                  e.putString("custom_pids", arr.toString())
                   e.apply()
               }
 
@@ -511,7 +579,7 @@ jobs:
                       cleanCmd == "22F190" -> "62 F1 90 56 46 37 53 41 35 46 56"
                       cleanCmd.startsWith("AT") -> "OK"
                       cleanCmd.startsWith("23") -> "7F 23 33"
-                      else -> "7F ${cleanCmd.take(2)} 31"
+                      else -> "62 ${cleanCmd.drop(2).take(2)} ${cleanCmd.drop(4).take(2)} 04 B0"
                   }
               }
 
@@ -540,7 +608,7 @@ jobs:
                       val u8 = b[0]
                       val u16 = if (b.size >= 2) (b[0] * 256 + b[1]) else b[0]
                       val u16Last = if (b.size >= 4) (b[b.size - 2] * 256 + b[b.size - 1]) else u16
-                      return "Bytes: ${b.joinToString(" ") { "%02X".format(it) }} | 8b=$u8 | 16b(AB)=$u16 | 16b(CD)=$u16Last" to false
+                      return "Bytes: ${b.joinToString(" ") { "%02X".format(it) }} | 8b(A)=$u8 | 16b(AB)=$u16 | 16b(CD)=$u16Last" to false
                   }
                   return "Resposta bruta recebida" to false
               }
@@ -549,7 +617,8 @@ jobs:
                   var reads = 0
                   var tWindow = SystemClock.elapsedRealtime()
                   while (running) {
-                      val activeList = if (fastPoll) pids.filter { it.fast } else pids
+                      val currentList = activePids()
+                      val activeList = if (fastPoll) currentList.filter { it.fast } else currentList
                       for (p in activeList) {
                           if (!running) return
                           if ((fails[p.k] ?: 0) >= 3) continue
@@ -576,10 +645,15 @@ jobs:
 
               private fun onNewValue(p: P, v: Double) {
                   show(p, v)
-                  if (p.k == "map16") {
+                  val hasCustomBoost = customSpecs.any { it.feedBoost }
+                  if (p.feedBoost) {
                       show(boostP, (v - baro) / 100.0)
-                  } else if (p.k == "map" && (fails["map16"] ?: 0) >= 3) {
-                      show(boostP, (v - baro) / 100.0)
+                  } else if (!hasCustomBoost) {
+                      if (p.k == "map16") {
+                          show(boostP, (v - baro) / 100.0)
+                      } else if (p.k == "map" && (fails["map16"] ?: 0) >= 3) {
+                          show(boostP, (v - baro) / 100.0)
+                      }
                   }
                   if (p.k == "lam") show(afrP, v * 14.7)
                   if (p.k == "spd") updateDragTimer(v)
@@ -644,7 +718,7 @@ jobs:
               }
 
               private fun resetPeaks() {
-                  mn.clear(); mx.clear(); tripped.clear()
+                  mn.clear(); mx.clear(); tripped.clear(); fails.clear()
               }
 
               private fun demo() {
@@ -656,10 +730,10 @@ jobs:
                       while (running) {
                           val t = (System.currentTimeMillis() - t0) / 1000.0
                           val throttle = ((sin(t * 0.65) + 1.0) / 2.0).coerceIn(0.05, 1.0)
-                          pids.forEachIndexed { i, p ->
+                          activePids().forEachIndexed { i, p ->
                               val v = when (p.k) {
                                   "rpm" -> 850.0 + throttle * 5650.0
-                                  "map16" -> 35.0 + throttle * 255.0 // Simula até 290 kPa (~1.9 bar de boost)
+                                  "map16" -> 35.0 + throttle * 255.0
                                   "map_tgt" -> 100.0 + throttle * 195.0
                                   "map" -> (35.0 + throttle * 255.0).coerceAtMost(255.0)
                                   "rail" -> 50.0 + throttle * 145.0
@@ -671,7 +745,7 @@ jobs:
                                   "iat" -> 34.0 + throttle * 14.0
                                   "cat" -> 420.0 + throttle * 440.0
                                   "vb" -> 14.1 + 0.1 * cos(t)
-                                  else -> p.lo + (p.hi - p.lo) * (0.3 + 0.2 * sin(t * (0.4 + i * 0.1)))
+                                  else -> p.lo + (p.hi - p.lo) * (0.3 + 0.25 * sin(t * (0.4 + i * 0.1)))
                               }
                               onNewValue(p, v)
                           }
@@ -760,6 +834,9 @@ jobs:
                                   if (state == 2) "$status • ${"%.1f".format(Locale.US, hz)} Hz" else status,
                                   style = MaterialTheme.typography.bodySmall, color = Mute, maxLines = 1, overflow = TextOverflow.Ellipsis
                               )
+                          }
+                          IconButton(onClick = { prefillCmd = "22 D4 0A"; showAddPid = true }) {
+                              Icon(Icons.Rounded.AddCircleOutline, contentDescription = "Novo PID UDS", tint = Amb)
                           }
                           IconButton(onClick = { showTerm = true }) {
                               Icon(Icons.Rounded.Terminal, contentDescription = "Terminal Serial UDS", tint = Pri)
@@ -859,6 +936,7 @@ jobs:
                       }
                   }
                   if (showTerm) UdsTerminalSheet()
+                  if (showAddPid) CustomPidDialog()
                   editing?.let { EditDialog(it) }
                   devs?.let { l ->
                       AlertDialog(
@@ -879,6 +957,153 @@ jobs:
                           dismissButton = { TextButton(onClick = { devs = null }) { Text("Cancelar") } }
                       )
                   }
+              }
+
+              @Composable
+              private fun CustomPidDialog() {
+                  var name by remember { mutableStateOf("MAP Coletor UDS") }
+                  var cmd by remember { mutableStateOf(prefillCmd) }
+                  var unit by remember { mutableStateOf("kPa") }
+                  var mode by remember { mutableStateOf(1) } // 1 = 16-bit AB
+                  var mulTxt by remember { mutableStateOf("0.1") }
+                  var addTxt by remember { mutableStateOf("0.0") }
+                  var decTxt by remember { mutableStateOf("1") }
+                  var loTxt by remember { mutableStateOf("20.0") }
+                  var hiTxt by remember { mutableStateOf("350.0") }
+                  var fast by remember { mutableStateOf(true) }
+                  var feedBoost by remember { mutableStateOf(false) }
+
+                  val presets = listOf(
+                      "kPa PSA (x0.1)" to Triple("kPa", "0.1", "0.0"),
+                      "kPa ISO (x0.03125)" to Triple("kPa", "0.03125", "0.0"),
+                      "Temp °C (-40)" to Triple("°C", "1.0", "-40.0"),
+                      "Bar (x0.001)" to Triple("bar", "0.001", "0.0")
+                  )
+                  val modes = listOf("8b (A)", "16b (AB)", "16b (CD)", "16b Signed")
+
+                  AlertDialog(
+                      containerColor = Surf2,
+                      onDismissRequest = { showAddPid = false },
+                      title = { Text("Novo Sensor UDS / OBD2") },
+                      text = {
+                          Column(
+                              Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
+                              verticalArrangement = Arrangement.spacedBy(10.dp)
+                          ) {
+                              Text(
+                                  "Fórmula: (Valor_Bytes × Multiplicador) + Offset",
+                                  style = MaterialTheme.typography.labelSmall, color = Pri
+                              )
+                              Row(
+                                  Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                                  horizontalArrangement = Arrangement.spacedBy(6.dp)
+                              ) {
+                                  presets.forEach { (label, cfg) ->
+                                      AssistChip(
+                                          onClick = { unit = cfg.first; mulTxt = cfg.second; addTxt = cfg.third },
+                                          label = { Text(label, style = MaterialTheme.typography.labelSmall) }
+                                      )
+                                  }
+                              }
+                              OutlinedTextField(
+                                  value = name, onValueChange = { name = it },
+                                  singleLine = true, label = { Text("Nome no Card") }, modifier = Modifier.fillMaxWidth()
+                              )
+                              Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                  OutlinedTextField(
+                                      value = cmd, onValueChange = { cmd = it.uppercase() },
+                                      singleLine = true, label = { Text("Comando Hex") }, modifier = Modifier.weight(1.3f),
+                                      keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Characters)
+                                  )
+                                  OutlinedTextField(
+                                      value = unit, onValueChange = { unit = it },
+                                      singleLine = true, label = { Text("Unid.") }, modifier = Modifier.weight(0.7f)
+                                  )
+                              }
+                              Text("Extração de Bytes da Resposta:", style = MaterialTheme.typography.labelMedium, color = Mute)
+                              Row(
+                                  Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                                  horizontalArrangement = Arrangement.spacedBy(6.dp)
+                              ) {
+                                  modes.forEachIndexed { idx, label ->
+                                      FilterChip(
+                                          selected = mode == idx,
+                                          onClick = { mode = idx },
+                                          label = { Text(label, style = MaterialTheme.typography.labelSmall) }
+                                      )
+                                  }
+                              }
+                              Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                  OutlinedTextField(
+                                      value = mulTxt, onValueChange = { mulTxt = it }, singleLine = true,
+                                      label = { Text("Multiplicador") }, modifier = Modifier.weight(1f),
+                                      keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
+                                  )
+                                  OutlinedTextField(
+                                      value = addTxt, onValueChange = { addTxt = it }, singleLine = true,
+                                      label = { Text("Offset (+)") }, modifier = Modifier.weight(1f),
+                                      keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
+                                  )
+                              }
+                              Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                  OutlinedTextField(
+                                      value = loTxt, onValueChange = { loTxt = it }, singleLine = true,
+                                      label = { Text("Mín Escala") }, modifier = Modifier.weight(1f),
+                                      keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
+                                  )
+                                  OutlinedTextField(
+                                      value = hiTxt, onValueChange = { hiTxt = it }, singleLine = true,
+                                      label = { Text("Máx Escala") }, modifier = Modifier.weight(1f),
+                                      keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
+                                  )
+                                  OutlinedTextField(
+                                      value = decTxt, onValueChange = { decTxt = it }, singleLine = true,
+                                      label = { Text("Dec.") }, modifier = Modifier.weight(0.7f),
+                                      keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                                  )
+                              }
+                              Row(verticalAlignment = Alignment.CenterVertically) {
+                                  Text("Incluir no Fast Poll (WOT)", style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+                                  Switch(checked = fast, onCheckedChange = { fast = it })
+                              }
+                              Row(verticalAlignment = Alignment.CenterVertically) {
+                                  Text("Alimentar Manômetro de Boost (kPa)", style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+                                  Switch(checked = feedBoost, onCheckedChange = { feedBoost = it })
+                              }
+                          }
+                      },
+                      confirmButton = {
+                          Button(onClick = {
+                              val cleanHex = cmd.replace(" ", "").uppercase()
+                              if (name.isNotBlank() && cleanHex.length >= 4) {
+                                  if (feedBoost) {
+                                      for (i in customSpecs.indices) {
+                                          customSpecs[i] = customSpecs[i].copy(feedBoost = false)
+                                      }
+                                  }
+                                  val spec = CustomPidSpec(
+                                      key = "usr_" + System.currentTimeMillis(),
+                                      name = name.trim(),
+                                      unit = unit.trim(),
+                                      cmd = cleanHex,
+                                      mode = mode,
+                                      mul = mulTxt.replace(',', '.').toDoubleOrNull() ?: 1.0,
+                                      add = addTxt.replace(',', '.').toDoubleOrNull() ?: 0.0,
+                                      dec = decTxt.toIntOrNull()?.coerceIn(0, 3) ?: 1,
+                                      lo = loTxt.replace(',', '.').toDoubleOrNull() ?: 0.0,
+                                      hi = hiTxt.replace(',', '.').toDoubleOrNull() ?: 100.0,
+                                      fast = fast,
+                                      feedBoost = feedBoost
+                                  )
+                                  customSpecs.add(0, spec)
+                                  fails.remove(spec.key)
+                                  save()
+                                  showAddPid = false
+                              }
+                          }) { Text("Adicionar Card") }
+                      },
+                      dismissButton = { TextButton(onClick = { showAddPid = false }) { Text("Cancelar") } }
+                  )
               }
 
               @Composable
@@ -981,6 +1206,15 @@ jobs:
                                                       style = MaterialTheme.typography.labelMedium.copy(fontFamily = FontFamily.Monospace),
                                                       color = Pri, modifier = Modifier.weight(1f)
                                                   )
+                                                  if (!item.isErr && (item.tx.replace(" ", "").startsWith("22") || item.tx.replace(" ", "").startsWith("01"))) {
+                                                      TextButton(
+                                                          onClick = { prefillCmd = item.tx; showTerm = false; showAddPid = true },
+                                                          contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                                                          modifier = Modifier.height(26.dp)
+                                                      ) {
+                                                          Text("+ Criar Card", style = MaterialTheme.typography.labelSmall, color = Amb)
+                                                      }
+                                                  }
                                               }
                                               Text(
                                                   "RX < ${item.rx}",
@@ -1006,8 +1240,10 @@ jobs:
 
               @Composable
               private fun Panel() {
-                  val hits = allP.filter { tripped[it.k] == true }
-                  val gridItems = listOf(pids[4], afrP, pids[1], pids[2]) + pids.drop(5)
+                  val currentAll = allParams()
+                  val hits = currentAll.filter { tripped[it.k] == true }
+                  val customCards = customSpecs.map { it.toP() }
+                  val gridItems = customCards + listOf(basePids[4], afrP, basePids[1], basePids[2]) + basePids.drop(5)
 
                   LazyVerticalGrid(
                       columns = GridCells.Fixed(2), modifier = Modifier.fillMaxSize(),
@@ -1032,11 +1268,11 @@ jobs:
                       }
                       item(span = { GridItemSpan(maxLineSpan) }) {
                           Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                              Gauge(pids[0], Modifier.weight(1f))
+                              Gauge(basePids[0], Modifier.weight(1f))
                               Gauge(boostP, Modifier.weight(1f))
                           }
                       }
-                      items(gridItems) { Metric(it) }
+                      items(gridItems, key = { it.k }) { Metric(it) }
                   }
               }
 
@@ -1076,7 +1312,7 @@ jobs:
                               }
                           }
                           Row(
-                              Modifier.fillMaxWidth(),
+                              Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                               horizontalArrangement = Arrangement.spacedBy(8.dp),
                               verticalAlignment = Alignment.CenterVertically
                           ) {
@@ -1101,8 +1337,13 @@ jobs:
                                   }
                               )
                               AssistChip(
+                                  onClick = { prefillCmd = "22 D4 0A"; showAddPid = true },
+                                  label = { Text("+ PID UDS") },
+                                  leadingIcon = { Icon(Icons.Rounded.Add, contentDescription = null, modifier = Modifier.size(16.dp)) }
+                              )
+                              AssistChip(
                                   onClick = { showTerm = true },
-                                  label = { Text("UDS Hex") },
+                                  label = { Text("Terminal") },
                                   leadingIcon = { Icon(Icons.Rounded.Terminal, contentDescription = null, modifier = Modifier.size(16.dp)) }
                               )
                           }
@@ -1170,15 +1411,20 @@ jobs:
                       onClick = { editing = p },
                       colors = cc(if (hit) Color(0xFF381117) else if (dimmed) Bg else Surf),
                       shape = RoundedCornerShape(18.dp),
-                      border = BorderStroke(1.dp, if (hit) Err else SurfBorder)
+                      border = BorderStroke(1.dp, if (hit) Err else if (p.custom) Pri.copy(alpha = 0.45f) else SurfBorder)
                   ) {
                       Column(Modifier.padding(13.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                          Row(verticalAlignment = Alignment.CenterVertically) {
+                          Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                               Text(
                                   p.n, style = MaterialTheme.typography.labelMedium,
                                   color = if (dimmed) Mute.copy(alpha = 0.5f) else Mute,
                                   modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis
                               )
+                              if (p.custom) {
+                                  Surface(color = Pri.copy(alpha = 0.15f), shape = RoundedCornerShape(4.dp)) {
+                                      Text("UDS", Modifier.padding(horizontal = 4.dp, vertical = 1.dp), style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp), color = Pri)
+                                  }
+                              }
                               if (alerts[p.k]?.on == true) {
                                   Icon(Icons.Rounded.NotificationsActive, contentDescription = null, tint = Amb, modifier = Modifier.size(14.dp))
                               }
@@ -1331,6 +1577,7 @@ jobs:
 
               @Composable
               private fun Alerts() {
+                  val currentAll = allParams()
                   LazyColumn(
                       contentPadding = PaddingValues(16.dp, 8.dp, 16.dp, 20.dp),
                       verticalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxSize()
@@ -1380,18 +1627,26 @@ jobs:
                           }
                       }
                       item {
-                          Text(
-                              "Watchdogs por sensor (toque para configurar limite)",
-                              style = MaterialTheme.typography.titleSmall, color = Mute, modifier = Modifier.padding(top = 6.dp, start = 4.dp)
-                          )
+                          Row(
+                              Modifier.fillMaxWidth().padding(top = 6.dp, start = 4.dp),
+                              verticalAlignment = Alignment.CenterVertically
+                          ) {
+                              Text(
+                                  "Watchdogs por sensor (toque para editar)",
+                                  style = MaterialTheme.typography.titleSmall, color = Mute, modifier = Modifier.weight(1f)
+                              )
+                              TextButton(onClick = { prefillCmd = "22 D4 0A"; showAddPid = true }) {
+                                  Text("+ Novo PID", color = Pri)
+                              }
+                          }
                       }
-                      items(allP) { p ->
+                      items(currentAll, key = { it.k }) { p ->
                           val a = alerts[p.k]
                           Card(colors = cc(), shape = RoundedCornerShape(16.dp), border = BorderStroke(1.dp, SurfBorder), modifier = Modifier.fillMaxWidth()) {
                               ListItem(
                                   colors = ListItemDefaults.colors(containerColor = Color.Transparent),
                                   modifier = Modifier.clickable { editing = p },
-                                  headlineContent = { Text(p.n, fontWeight = FontWeight.SemiBold) },
+                                  headlineContent = { Text(if (p.custom) "${p.n} (${p.c})" else p.n, fontWeight = FontWeight.SemiBold) },
                                   supportingContent = {
                                       Text(
                                           if (a == null || !a.on) "Monitoramento desligado"
@@ -1422,6 +1677,9 @@ jobs:
                       title = { Text("Watchdog: " + p.n) },
                       text = {
                           Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                              if (p.custom) {
+                                  Text("Comando UDS/OBD: ${p.c}", style = MaterialTheme.typography.labelMedium, color = Pri)
+                              }
                               Row(verticalAlignment = Alignment.CenterVertically) {
                                   Text("Habilitar Alerta", modifier = Modifier.weight(1f))
                                   Switch(checked = on, onCheckedChange = { on = it })
@@ -1435,6 +1693,21 @@ jobs:
                                   label = { Text("Limite (${p.u})") },
                                   keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
                               )
+                              if (p.custom) {
+                                  OutlinedButton(
+                                      onClick = {
+                                          customSpecs.removeAll { it.key == p.k }
+                                          alerts.remove(p.k); live.remove(p.k)
+                                          save(); editing = null
+                                      },
+                                      colors = ButtonDefaults.outlinedButtonColors(contentColor = Err),
+                                      modifier = Modifier.fillMaxWidth()
+                                  ) {
+                                      Icon(Icons.Rounded.DeleteOutline, contentDescription = null)
+                                      Spacer(Modifier.width(6.dp))
+                                      Text("Excluir PID Customizado")
+                                  }
+                              }
                           }
                       },
                       confirmButton = {
