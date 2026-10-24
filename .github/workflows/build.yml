@@ -15,7 +15,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.7
-      - name: Gerar projeto Android nativo (MED17 Dash)
+      - name: Gerar projeto Android nativo (MED17 Dash v7.0)
         run: |
           mkdir -p app/src/main/java/br/local/ds3 app/src/main/res/values app/src/main/res/drawable app/src/main/res/mipmap-anydpi-v26
           cat > settings.gradle.kts <<'EOF'
@@ -46,8 +46,8 @@ jobs:
                   applicationId = "br.local.ds3"
                   minSdk = 26
                   targetSdk = 34
-                  versionCode = 8
-                  versionName = "6.0"
+                  versionCode = 9
+                  versionName = "7.0"
               }
               compileOptions {
                   sourceCompatibility = JavaVersion.VERSION_17
@@ -123,6 +123,7 @@ jobs:
           import androidx.compose.foundation.background
           import androidx.compose.foundation.clickable
           import androidx.compose.foundation.horizontalScroll
+          import androidx.compose.foundation.isSystemInDarkTheme
           import androidx.compose.foundation.layout.*
           import androidx.compose.foundation.lazy.LazyColumn
           import androidx.compose.foundation.lazy.grid.*
@@ -201,18 +202,6 @@ jobs:
           )
           data class TermLine(val time: String, val tx: String, val rx: String, val decoded: String, val isErr: Boolean)
 
-          private val Bg = Color(0xFF090C10)
-          private val Surf = Color(0xFF121721)
-          private val Surf2 = Color(0xFF1A2130)
-          private val SurfBorder = Color(0xFF263044)
-          private val Pri = Color(0xFF00E5FF)
-          private val Amb = Color(0xFFFFAB00)
-          private val Err = Color(0xFFFF3D57)
-          private val Ok = Color(0xFF00E676)
-          private val Mute = Color(0xFF8A99AD)
-          private val Ink = Color(0xFFF0F4F8)
-
-          @OptIn(ExperimentalMaterial3Api::class)
           class MainActivity : ComponentActivity() {
               private val spp = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
               private val boostP = P("boost", "Boost Relativo", "bar", "", 2, -0.8, 2.5, true) { 0.0 }
@@ -247,12 +236,15 @@ jobs:
               private fun activePids(): List<P> = basePids + customSpecs.map { it.toP() }
               private fun allParams(): List<P> = listOf(boostP, afrP) + activePids()
 
-              // Layout customizável do Cockpit: ordem, tamanho (0=P, 1=M, 2=G) e estilo (mostrador/cartão)
               private val visibleCockpitKeys = mutableStateListOf<String>()
               private var editLayoutMode by mutableStateOf(false)
               private val cockpitSize = mutableStateMapOf<String, Int>()
               private val cockpitGauge = mutableStateMapOf<String, Boolean>()
               private fun gaugeStyle(k: String) = cockpitGauge[k] ?: (k == "rpm" || k == "boost")
+
+              // Customização visual e tema
+              private var darkThemeOpt by mutableStateOf(0) // 0: Sistema, 1: Escuro, 2: Claro
+              private var accentColorIdx by mutableStateOf(0) // 0: Ciano, 1: Âmbar, 2: Verde, 3: Vermelho, 4: Azul
 
               private val soundNames = listOf("Bipe Curto", "Bipe Duplo", "Alerta Tático", "Alarme Contínuo", "Som Personalizado")
 
@@ -321,7 +313,6 @@ jobs:
               private var time0to100 by mutableStateOf<Double?>(null)
               private var time40to120 by mutableStateOf<Double?>(null)
 
-              // ---- GPS (Dragy) ----
               private val locMgr by lazy { getSystemService(LOCATION_SERVICE) as LocationManager }
               private var gpsOn by mutableStateOf(false)
               private var gpsKmh by mutableStateOf<Double?>(null)
@@ -402,6 +393,8 @@ jobs:
                   vibe = sp.getBoolean("vibe", true)
                   shiftRpm = sp.getInt("shiftRpm", 6200)
                   lastAddr = sp.getString("addr", null)
+                  darkThemeOpt = sp.getInt("dark_theme_opt", 0)
+                  accentColorIdx = sp.getInt("accent_color_idx", 0)
 
                   customSpecs.clear()
                   sp.getString("custom_pids", null)?.let { jsonStr ->
@@ -439,6 +432,7 @@ jobs:
                   }
                   if (visibleCockpitKeys.isEmpty()) {
                       visibleCockpitKeys.addAll(listOf("rpm", "boost", "rail", "afr", "map16", "map_tgt", "adv", "tps", "spd", "iat", "ect", "cat", "st", "lt", "ld", "maf", "vb"))
+                      visibleCockpitKeys.addAll(customSpecs.map { it.key })
                   }
 
                   cockpitSize.clear(); cockpitGauge.clear()
@@ -465,6 +459,7 @@ jobs:
                   val e = sp.edit()
                   e.putBoolean("master", master).putInt("snd", snd).putString("uri", uri)
                       .putInt("cool", cool).putBoolean("vibe", vibe).putInt("shiftRpm", shiftRpm)
+                      .putInt("dark_theme_opt", darkThemeOpt).putInt("accent_color_idx", accentColorIdx)
                   alerts.forEach { (k, a) -> e.putString("al_$k", "${if (a.on) 1 else 0},${if (a.above) 1 else 0},${a.v}") }
 
                   val arrCust = JSONArray()
@@ -732,7 +727,6 @@ jobs:
                   if (p.k == "lam") show(afrP, v * 14.7)
               }
 
-              // ---------- GPS / Dragy ----------
               private fun hasLocPerm() =
                   checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
 
@@ -758,7 +752,6 @@ jobs:
                   gpsHandler.removeCallbacks(gpsTick)
               }
 
-              // Tempos por GPS: interpola o instante exato em que a velocidade cruza cada limiar entre dois fixes.
               private fun onGpsFix(t: Long, v: Double) {
                   gpsKmh = v; gpsLastFix = SystemClock.elapsedRealtime(); gpsFresh = true
                   val pv = gpsPrevV
@@ -780,7 +773,7 @@ jobs:
                           dragArmed = false; dragRunning = false
                       }
                       if (time0to60 == null && t - dragStartT > 5000L && v < 8.0) {
-                          dragRunning = false // falsa partida: continua armado
+                          dragRunning = false
                       } else if (t - dragStartT > 90_000L || (time0to100 != null && v < 5.0)) {
                           dragArmed = false; dragRunning = false
                       }
@@ -904,67 +897,98 @@ jobs:
 
               @Composable
               private fun AppTheme(content: @Composable () -> Unit) {
+                  val dark = when (darkThemeOpt) {
+                      1 -> true
+                      2 -> false
+                      else -> isSystemInDarkTheme()
+                  }
+
+                  val primaryCol = when (accentColorIdx) {
+                      1 -> Color(0xFFFFAB00) // Âmbar Tático
+                      2 -> Color(0xFF00E676) // Verde Corsa
+                      3 -> Color(0xFFFF3D57) // Vermelho Injeção
+                      4 -> Color(0xFF2979FF) // Azul Motorsport
+                      else -> Color(0xFF00E5FF) // Ciano Racing
+                  }
+
+                  val bgCol = if (dark) Color(0xFF090C10) else Color(0xFFF4F6F9)
+                  val surfCol = if (dark) Color(0xFF121721) else Color(0xFFFFFFFF)
+                  val surf2Col = if (dark) Color(0xFF1A2130) else Color(0xFFE4E9F2)
+                  val textCol = if (dark) Color(0xFFF0F4F8) else Color(0xFF10141A)
+                  val muteCol = if (dark) Color(0xFF8A99AD) else Color(0xFF606C80)
+                  val borderCol = if (dark) Color(0xFF263044) else Color(0xFFD0D7DE)
+
                   val cs = darkColorScheme(
-                      primary = Pri, onPrimary = Color(0xFF00262C),
-                      secondary = Amb, onSecondary = Color(0xFF332000),
-                      background = Bg, onBackground = Ink,
-                      surface = Surf, onSurface = Ink,
-                      surfaceVariant = Surf2, onSurfaceVariant = Mute,
-                      error = Err, errorContainer = Color(0xFF421018), onErrorContainer = Color(0xFFFFDAD6),
-                      primaryContainer = Color(0xFF004853), onPrimaryContainer = Color(0xFFB4F6FF),
-                      secondaryContainer = Color(0xFF232C3D), onSecondaryContainer = Ink,
-                      outline = SurfBorder
+                      primary = primaryCol,
+                      onPrimary = if (dark) Color(0xFF00262C) else Color(0xFFFFFFFF),
+                      secondary = primaryCol,
+                      onSecondary = Color(0xFFFFFFFF),
+                      background = bgCol,
+                      onBackground = textCol,
+                      surface = surfCol,
+                      onSurface = textCol,
+                      surfaceVariant = surf2Col,
+                      onSurfaceVariant = muteCol,
+                      error = Color(0xFFFF3D57),
+                      errorContainer = Color(0xFF421018),
+                      onErrorContainer = Color(0xFFFFDAD6),
+                      primaryContainer = primaryCol.copy(alpha, 0.25f),
+                      onPrimaryContainer = textCol,
+                      secondaryContainer = surf2Col,
+                      onSecondaryContainer = textCol,
+                      outline = borderCol
                   )
                   MaterialTheme(colorScheme = cs, content = content)
               }
 
               @Composable
-              private fun cc(c: Color = Surf) = CardDefaults.cardColors(containerColor = c, contentColor = Ink)
+              private fun cc(c: Color = MaterialTheme.colorScheme.surface) =
+                  CardDefaults.cardColors(containerColor = c, contentColor = MaterialTheme.colorScheme.onSurface)
 
               @Composable
               private fun Header() {
-                  Column(Modifier.fillMaxWidth().background(Bg).statusBarsPadding()) {
+                  Column(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.background).statusBarsPadding()) {
                       Row(
                           Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 10.dp),
                           verticalAlignment = Alignment.CenterVertically
                       ) {
                           Column(Modifier.weight(1f)) {
                               Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                  Text("MED17", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Black, color = Ink)
+                                  Text("MED17", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Black, color = MaterialTheme.colorScheme.onBackground)
                                   Surface(
-                                      color = Pri.copy(alpha = 0.14f), shape = RoundedCornerShape(6.dp),
-                                      border = BorderStroke(1.dp, Pri.copy(alpha = 0.4f))
+                                      color = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f), shape = RoundedCornerShape(6.dp),
+                                      border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.4f))
                                   ) {
                                       Text(
-                                          "4.2", Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                                          style = MaterialTheme.typography.labelSmall, color = Pri, fontWeight = FontWeight.Bold
+                                          "4.2 DASH", Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                          style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold
                                       )
                                   }
                               }
                               Text(
                                   if (state == 2) "$status • ${"%.1f".format(Locale.US, hz)} Hz" else status,
-                                  style = MaterialTheme.typography.bodySmall, color = Mute, maxLines = 1, overflow = TextOverflow.Ellipsis
+                                  style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis
                               )
                           }
                           IconButton(onClick = { prefillCmd = "22 D4 0A"; showAddPid = true }) {
-                              Icon(Icons.Rounded.AddCircleOutline, contentDescription = "Novo PID UDS", tint = Amb)
+                              Icon(Icons.Rounded.AddCircleOutline, contentDescription = "Novo PID UDS", tint = MaterialTheme.colorScheme.secondary)
                           }
                           IconButton(onClick = { showTerm = true }) {
-                              Icon(Icons.Rounded.Terminal, contentDescription = "Terminal Serial UDS", tint = Pri)
+                              Icon(Icons.Rounded.Terminal, contentDescription = "Terminal Serial UDS", tint = MaterialTheme.colorScheme.primary)
                           }
                           if (state == 2) {
                               IconButton(onClick = { resetPeaks() }) {
-                                  Icon(Icons.Rounded.Refresh, contentDescription = "Zerar Picos", tint = Mute)
+                                  Icon(Icons.Rounded.Refresh, contentDescription = "Zerar Picos", tint = MaterialTheme.colorScheme.onSurfaceVariant)
                               }
                           }
                           val (dot, label) = when {
-                              state == 1 -> Amb to "CAN..."
-                              state == 2 && sock == null -> Pri to "DEMO"
+                              state == 1 -> MaterialTheme.colorScheme.secondary to "CAN..."
+                              state == 2 && sock == null -> MaterialTheme.colorScheme.primary to "DEMO"
                               state == 2 -> Ok to "ONLINE"
-                              else -> Mute to "OFFLINE"
+                              else -> MaterialTheme.colorScheme.onSurfaceVariant to "OFFLINE"
                           }
                           Surface(
-                              shape = RoundedCornerShape(50), color = Surf2,
+                              shape = RoundedCornerShape(50), color = MaterialTheme.colorScheme.surfaceVariant,
                               border = BorderStroke(1.dp, dot.copy(alpha = 0.4f))
                           ) {
                               Row(Modifier.padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -994,9 +1018,9 @@ jobs:
                       for (i in 0 until segments) {
                           val segColor = when {
                               overShift -> Err
-                              i >= activeSegments -> Surf2
+                              i >= activeSegments -> MaterialTheme.colorScheme.surfaceVariant
                               i < segments * 0.5f -> Ok
-                              i < segments * 0.8f -> Amb
+                              i < segments * 0.8f -> MaterialTheme.colorScheme.secondary
                               else -> Err
                           }
                           Box(
@@ -1010,16 +1034,16 @@ jobs:
               private fun App() {
                   var tab by remember { mutableStateOf(0) }
                   Scaffold(
-                      containerColor = Bg,
+                      containerColor = MaterialTheme.colorScheme.background,
                       topBar = { Header() },
                       bottomBar = {
-                          NavigationBar(containerColor = Surf, tonalElevation = 0.dp) {
+                          NavigationBar(containerColor = MaterialTheme.colorScheme.surface, tonalElevation = 0.dp) {
                               val navItems = listOf(
                                   Triple("Cockpit", Icons.Rounded.Speed, 0),
                                   Triple("Dragy", Icons.Rounded.Timer, 1),
                                   Triple("Logs", Icons.Rounded.FiberManualRecord, 2),
                                   Triple("Alertas", Icons.Rounded.NotificationsActive, 3),
-                                  Triple("ECU/DTC", Icons.Rounded.Build, 4)
+                                  Triple("ECU/Sobre", Icons.Rounded.Info, 4)
                               )
                               navItems.forEach { (n, ic, i) ->
                                   NavigationBarItem(
@@ -1027,9 +1051,9 @@ jobs:
                                       icon = { Icon(ic, contentDescription = n) },
                                       label = { Text(n, maxLines = 1) },
                                       colors = NavigationBarItemDefaults.colors(
-                                          indicatorColor = Pri.copy(alpha = 0.16f),
-                                          selectedIconColor = Pri, selectedTextColor = Pri,
-                                          unselectedIconColor = Mute, unselectedTextColor = Mute
+                                          indicatorColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.16f),
+                                          selectedIconColor = MaterialTheme.colorScheme.primary, selectedTextColor = MaterialTheme.colorScheme.primary,
+                                          unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant, unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
                                       )
                                   )
                               }
@@ -1042,7 +1066,7 @@ jobs:
                               1 -> PerformanceScreen()
                               2 -> DatalogScreen()
                               3 -> Alerts()
-                              else -> Dtcs()
+                              else -> EcuAndAboutScreen()
                           }
                       }
                   }
@@ -1051,7 +1075,7 @@ jobs:
                   editing?.let { EditDialog(it) }
                   devs?.let { l ->
                       AlertDialog(
-                          containerColor = Surf2,
+                          containerColor = MaterialTheme.colorScheme.surfaceVariant,
                           onDismissRequest = { devs = null },
                           title = { Text("Selecionar Scanner OBD2") },
                           text = {
@@ -1060,7 +1084,7 @@ jobs:
                                       TextButton(
                                           onClick = { devs = null; connect(d) },
                                           modifier = Modifier.fillMaxWidth()
-                                      ) { Text(d.name ?: d.address, color = Pri) }
+                                      ) { Text(d.name ?: d.address, color = MaterialTheme.colorScheme.primary) }
                                   }
                               }
                           },
@@ -1093,7 +1117,7 @@ jobs:
                   val modes = listOf("8b (A)", "16b (AB)", "16b (CD)", "16b Signed")
 
                   AlertDialog(
-                      containerColor = Surf2,
+                      containerColor = MaterialTheme.colorScheme.surfaceVariant,
                       onDismissRequest = { showAddPid = false },
                       title = { Text("Novo Sensor UDS / OBD2") },
                       text = {
@@ -1103,7 +1127,7 @@ jobs:
                           ) {
                               Text(
                                   "Fórmula: (Valor_Bytes × Multiplicador) + Offset",
-                                  style = MaterialTheme.typography.labelSmall, color = Pri
+                                  style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary
                               )
                               Row(
                                   Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
@@ -1131,7 +1155,7 @@ jobs:
                                       singleLine = true, label = { Text("Unid.") }, modifier = Modifier.weight(0.7f)
                                   )
                               }
-                              Text("Extração de Bytes da Resposta:", style = MaterialTheme.typography.labelMedium, color = Mute)
+                              Text("Extração de Bytes da Resposta:", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                               Row(
                                   Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                                   horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -1233,21 +1257,21 @@ jobs:
 
                   ModalBottomSheet(
                       onDismissRequest = { showTerm = false },
-                      containerColor = Surf,
-                      contentColor = Ink
+                      containerColor = MaterialTheme.colorScheme.surface,
+                      contentColor = MaterialTheme.colorScheme.onSurface
                   ) {
                       Column(
                           Modifier.fillMaxWidth().fillMaxHeight(0.85f).padding(horizontal = 16.dp),
                           verticalArrangement = Arrangement.spacedBy(10.dp)
                       ) {
                           Row(verticalAlignment = Alignment.CenterVertically) {
-                              Icon(Icons.Rounded.Terminal, contentDescription = null, tint = Pri)
+                              Icon(Icons.Rounded.Terminal, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                               Spacer(Modifier.width(8.dp))
                               Column(Modifier.weight(1f)) {
                                   Text("Terminal Serial UDS (Modo 22 / 23 / AT)", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                                  Text("Header ativo: 0x7E0 -> RX: 0x7E8 (Bosch MED17.4.2)", style = MaterialTheme.typography.labelSmall, color = Mute)
+                                  Text("Header ativo: 0x7E0 -> RX: 0x7E8 (Bosch MED17.4.2)", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                               }
-                              TextButton(onClick = { termLogs.clear() }) { Text("Limpar", color = Mute) }
+                              TextButton(onClick = { termLogs.clear() }) { Text("Limpar", color = MaterialTheme.colorScheme.onSurfaceVariant) }
                           }
 
                           Row(
@@ -1272,7 +1296,7 @@ jobs:
                                   onValueChange = { cmdInput = it.uppercase() },
                                   modifier = Modifier.weight(1f),
                                   singleLine = true,
-                                  label = { Text("Comando Hex (ex: 22 D4 08 ou 23 ...)") },
+                                  label = { Text("Comando Hex (ex: 22 D4 08)") },
                                   keyboardOptions = KeyboardOptions(
                                       capitalization = KeyboardCapitalization.Characters,
                                       imeAction = ImeAction.Send
@@ -1289,16 +1313,16 @@ jobs:
                           }
 
                           Card(
-                              colors = cc(Bg),
+                              colors = cc(MaterialTheme.colorScheme.background),
                               shape = RoundedCornerShape(14.dp),
-                              border = BorderStroke(1.dp, SurfBorder),
+                              border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
                               modifier = Modifier.fillMaxWidth().weight(1f)
                           ) {
                               if (termLogs.isEmpty()) {
                                   Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                                       Text(
                                           "Envie um DID (ex: 22 01 70) para inspecionar os bytes da MED17.4.2.",
-                                          style = MaterialTheme.typography.bodySmall, color = Mute
+                                          style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
                                       )
                                   }
                               } else {
@@ -1310,14 +1334,14 @@ jobs:
                                       items(termLogs) { item ->
                                           Column(
                                               Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
-                                                  .background(Surf2.copy(alpha = 0.6f)).padding(10.dp),
+                                                  .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)).padding(10.dp),
                                               verticalArrangement = Arrangement.spacedBy(3.dp)
                                           ) {
                                               Row(verticalAlignment = Alignment.CenterVertically) {
                                                   Text(
                                                       "TX [${item.time}] > ${item.tx}",
                                                       style = MaterialTheme.typography.labelMedium.copy(fontFamily = FontFamily.Monospace),
-                                                      color = Pri, modifier = Modifier.weight(1f)
+                                                      color = MaterialTheme.colorScheme.primary, modifier = Modifier.weight(1f)
                                                   )
                                                   if (!item.isErr && (item.tx.replace(" ", "").startsWith("22") || item.tx.replace(" ", "").startsWith("01"))) {
                                                       TextButton(
@@ -1325,7 +1349,7 @@ jobs:
                                                           contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
                                                           modifier = Modifier.height(26.dp)
                                                       ) {
-                                                          Text("+ Criar Card", style = MaterialTheme.typography.labelSmall, color = Amb)
+                                                          Text("+ Criar Card", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.secondary)
                                                       }
                                                   }
                                               }
@@ -1339,7 +1363,7 @@ jobs:
                                               Text(
                                                   item.decoded,
                                                   style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
-                                                  color = if (item.isErr) Color(0xFFFFB4AB) else Amb
+                                                  color = if (item.isErr) Color(0xFFFFB4AB) else MaterialTheme.colorScheme.secondary
                                               )
                                           }
                                       }
@@ -1382,27 +1406,27 @@ jobs:
                       }
 
                       item(span = { GridItemSpan(maxLineSpan) }) {
-                          Card(colors = cc(Surf2), shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth()) {
+                          Card(colors = cc(MaterialTheme.colorScheme.surfaceVariant), shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth()) {
                               Row(
                                   Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
                                   verticalAlignment = Alignment.CenterVertically,
                                   horizontalArrangement = Arrangement.SpaceBetween
                               ) {
                                   Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                      Icon(Icons.Rounded.DashboardCustomize, contentDescription = null, tint = Pri, modifier = Modifier.size(18.dp))
+                                      Icon(Icons.Rounded.DashboardCustomize, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
                                       Text("Cockpit (${visibleList.size} ativos)", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
                                   }
                                   Row(verticalAlignment = Alignment.CenterVertically) {
                                       if (editLayoutMode) {
                                           TextButton(onClick = { resetCockpit() }, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)) {
-                                              Text("Padrão", color = Mute)
+                                              Text("Padrão", color = MaterialTheme.colorScheme.onSurfaceVariant)
                                           }
                                       }
                                       TextButton(
                                           onClick = { editLayoutMode = !editLayoutMode },
                                           contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
                                       ) {
-                                          Text(if (editLayoutMode) "Concluir" else "Organizar Tela", color = if (editLayoutMode) Ok else Pri, fontWeight = FontWeight.Bold)
+                                          Text(if (editLayoutMode) "Concluir" else "Organizar Tela", color = if (editLayoutMode) Ok else MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
                                       }
                                   }
                               }
@@ -1412,8 +1436,8 @@ jobs:
                       if (editLayoutMode) {
                           item(span = { GridItemSpan(maxLineSpan) }) {
                               Text(
-                                  "◀ ▶ muda a posição  •  Tam P/M/G muda o tamanho  •  Mostrador/Cartão muda o estilo  •  ✕ oculta",
-                                  style = MaterialTheme.typography.labelSmall, color = Amb
+                                  "◀ ▶ muda posição  •  Tam P/M/G  •  Mostrador/Cartão  •  ✕ oculta",
+                                  style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.secondary
                               )
                           }
                       }
@@ -1421,7 +1445,7 @@ jobs:
                       if (editLayoutMode && hiddenList.isNotEmpty()) {
                           item(span = { GridItemSpan(maxLineSpan) }) {
                               Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                  Text("Parâmetros disponíveis para adicionar:", style = MaterialTheme.typography.labelMedium, color = Amb)
+                                  Text("Parâmetros disponíveis para adicionar:", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.secondary)
                                   Row(
                                       Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                                       horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -1459,7 +1483,7 @@ jobs:
                       if (gauge) Gauge(p, Modifier.fillMaxWidth(), sz) else Metric(p, sz)
                       if (editLayoutMode) {
                           Surface(
-                              color = Bg.copy(alpha = 0.88f),
+                              color = MaterialTheme.colorScheme.background.copy(alpha = 0.88f),
                               shape = RoundedCornerShape(if (gauge) 24.dp else 18.dp),
                               modifier = Modifier.matchParentSize()
                           ) {
@@ -1470,24 +1494,24 @@ jobs:
                               ) {
                                   Row(verticalAlignment = Alignment.CenterVertically) {
                                       IconButton(onClick = { moveBy(-1) }, modifier = Modifier.size(40.dp)) {
-                                          Icon(Icons.Rounded.ChevronLeft, contentDescription = "Mover antes", tint = Pri)
+                                          Icon(Icons.Rounded.ChevronLeft, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                                       }
                                       IconButton(onClick = { visibleCockpitKeys.remove(p.k); save() }, modifier = Modifier.size(40.dp)) {
-                                          Icon(Icons.Rounded.Close, contentDescription = "Ocultar", tint = Err)
+                                          Icon(Icons.Rounded.Close, contentDescription = null, tint = Err)
                                       }
                                       IconButton(onClick = { moveBy(1) }, modifier = Modifier.size(40.dp)) {
-                                          Icon(Icons.Rounded.ChevronRight, contentDescription = "Mover depois", tint = Pri)
+                                          Icon(Icons.Rounded.ChevronRight, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                                       }
                                   }
                                   Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                                       TextButton(
                                           onClick = { cockpitSize[p.k] = (sz + 1) % 3; save() },
                                           contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
-                                      ) { Text("Tam: " + listOf("P", "M", "G")[sz], color = Amb) }
+                                      ) { Text("Tam: " + listOf("P", "M", "G")[sz], color = MaterialTheme.colorScheme.secondary) }
                                       TextButton(
                                           onClick = { cockpitGauge[p.k] = !gauge; save() },
                                           contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
-                                      ) { Text(if (gauge) "Mostrador" else "Cartão", color = Pri) }
+                                      ) { Text(if (gauge) "Mostrador" else "Cartão", color = MaterialTheme.colorScheme.primary) }
                                   }
                               }
                           }
@@ -1499,7 +1523,7 @@ jobs:
               private fun ConnCard() {
                   Card(
                       colors = cc(), shape = RoundedCornerShape(20.dp),
-                      border = BorderStroke(1.dp, SurfBorder), modifier = Modifier.fillMaxWidth()
+                      border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline), modifier = Modifier.fillMaxWidth()
                   ) {
                       Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                           Row(
@@ -1526,7 +1550,7 @@ jobs:
                               FilledTonalButton(enabled = state == 0, onClick = { demo() }) { Text("Simular Stage 3") }
                               if (state == 0) {
                                   IconButton(onClick = { needPerm { pick() } }) {
-                                      Icon(Icons.Rounded.SettingsBluetooth, contentDescription = "Escolher Adaptador", tint = Pri)
+                                      Icon(Icons.Rounded.SettingsBluetooth, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                                   }
                               }
                           }
@@ -1551,7 +1575,7 @@ jobs:
                                   leadingIcon = {
                                       Icon(
                                           Icons.Rounded.FiberManualRecord, contentDescription = null,
-                                          tint = if (isLogging) Err else Mute, modifier = Modifier.size(14.dp)
+                                          tint = if (isLogging) Err else MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(14.dp)
                                       )
                                   }
                               )
@@ -1579,26 +1603,26 @@ jobs:
                   val peakFrac = (((peak ?: p.lo) - p.lo) / (p.hi - p.lo)).toFloat().coerceIn(0f, 1f)
                   val anim by animateFloatAsState(frac, animationSpec = tween(140), label = "gauge")
                   val col by animateColorAsState(
-                      when { hit || frac > 0.88f -> Err; frac > 0.72f -> Amb; else -> Pri }, label = "color"
+                      when { hit || frac > 0.88f -> Err; frac > 0.72f -> MaterialTheme.colorScheme.secondary; else -> MaterialTheme.colorScheme.primary }, label = "color"
                   )
 
                   Card(
                       onClick = { editing = p }, modifier = modifier, colors = cc(),
-                      shape = RoundedCornerShape(24.dp), border = BorderStroke(1.dp, if (hit) Err else SurfBorder)
+                      shape = RoundedCornerShape(24.dp), border = BorderStroke(1.dp, if (hit) Err else MaterialTheme.colorScheme.outline)
                   ) {
                       Box(Modifier.fillMaxWidth().aspectRatio(if (sz == 1) 1.7f else 1f), contentAlignment = Alignment.Center) {
                           Canvas(Modifier.fillMaxSize().padding(14.dp)) {
                               val w = 13.dp.toPx()
                               val s = Size(size.minDimension - w, size.minDimension - w)
                               val tl = Offset(w / 2, w / 2)
-                              drawArc(Surf2, 135f, 270f, false, tl, s, style = Stroke(w, cap = StrokeCap.Round))
+                              drawArc(MaterialTheme.colorScheme.surfaceVariant, 135f, 270f, false, tl, s, style = Stroke(w, cap = StrokeCap.Round))
                               drawArc(
-                                  Brush.sweepGradient(listOf(Pri, col, Err)),
+                                  Brush.sweepGradient(listOf(MaterialTheme.colorScheme.primary, col, Err)),
                                   135f, 270f * anim, false, tl, s, style = Stroke(w, cap = StrokeCap.Round)
                               )
                               if (peak != null && peakFrac > 0.05f) {
                                   drawArc(
-                                      Amb, 135f + 270f * peakFrac - 2f, 4f, false, tl, s,
+                                      MaterialTheme.colorScheme.secondary, 135f + 270f * peakFrac - 2f, 4f, false, tl, s,
                                       style = Stroke(w + 4.dp.toPx(), cap = StrokeCap.Butt)
                                   )
                               }
@@ -1609,13 +1633,13 @@ jobs:
                                   style = (if (sz == 2) MaterialTheme.typography.displayLarge else if (sz == 1) MaterialTheme.typography.displayMedium else MaterialTheme.typography.headlineLarge).copy(
                                       fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold
                                   ),
-                                  color = if (hit) Err else Ink
+                                  color = if (hit) Err else MaterialTheme.colorScheme.onSurface
                               )
-                              Text("${p.u} • pico ${if (peak == null) "–" else fmt(p, peak)}", style = MaterialTheme.typography.labelSmall, color = Mute)
+                              Text("${p.u} • pico ${if (peak == null) "–" else fmt(p, peak)}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                           }
                           Text(
                               p.n, Modifier.align(Alignment.BottomCenter).padding(bottom = 10.dp),
-                              style = MaterialTheme.typography.labelMedium, color = Mute, fontWeight = FontWeight.SemiBold
+                              style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, fontWeight = FontWeight.SemiBold
                           )
                       }
                   }
@@ -1628,24 +1652,24 @@ jobs:
                   val dimmed = fastPoll && !p.fast
                   Card(
                       onClick = { editing = p },
-                      colors = cc(if (hit) Color(0xFF381117) else if (dimmed) Bg else Surf),
+                      colors = cc(if (hit) Color(0xFF381117) else if (dimmed) MaterialTheme.colorScheme.background else MaterialTheme.colorScheme.surface),
                       shape = RoundedCornerShape(18.dp),
-                      border = BorderStroke(1.dp, if (hit) Err else if (p.custom) Pri.copy(alpha = 0.45f) else SurfBorder)
+                      border = BorderStroke(1.dp, if (hit) Err else if (p.custom) MaterialTheme.colorScheme.primary.copy(alpha = 0.45f) else MaterialTheme.colorScheme.outline)
                   ) {
                       Column(Modifier.padding(13.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                           Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                               Text(
                                   p.n, style = MaterialTheme.typography.labelMedium,
-                                  color = if (dimmed) Mute.copy(alpha = 0.5f) else Mute,
+                                  color = if (dimmed) MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f) else MaterialTheme.colorScheme.onSurfaceVariant,
                                   modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis
                               )
                               if (p.custom) {
-                                  Surface(color = Pri.copy(alpha = 0.15f), shape = RoundedCornerShape(4.dp)) {
-                                      Text("UDS", Modifier.padding(horizontal = 4.dp, vertical = 1.dp), style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp), color = Pri)
+                                  Surface(color = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f), shape = RoundedCornerShape(4.dp)) {
+                                      Text("UDS", Modifier.padding(horizontal = 4.dp, vertical = 1.dp), style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp), color = MaterialTheme.colorScheme.primary)
                                   }
                               }
                               if (alerts[p.k]?.on == true) {
-                                  Icon(Icons.Rounded.NotificationsActive, contentDescription = null, tint = Amb, modifier = Modifier.size(14.dp))
+                                  Icon(Icons.Rounded.NotificationsActive, contentDescription = null, tint = MaterialTheme.colorScheme.secondary, modifier = Modifier.size(14.dp))
                               }
                           }
                           Row(verticalAlignment = Alignment.Bottom) {
@@ -1654,21 +1678,21 @@ jobs:
                                   style = (if (sz == 0) MaterialTheme.typography.headlineSmall else if (sz == 1) MaterialTheme.typography.headlineMedium else MaterialTheme.typography.displayMedium).copy(
                                       fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold
                                   ),
-                                  color = if (hit) Err else if (dimmed) Mute else Ink
+                                  color = if (hit) Err else if (dimmed) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface
                               )
                               Spacer(Modifier.width(5.dp))
-                              Text(p.u, style = MaterialTheme.typography.labelSmall, color = Mute, modifier = Modifier.padding(bottom = 3.dp))
+                              Text(p.u, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(bottom = 3.dp))
                           }
                           LinearProgressIndicator(
                               progress = { (((v ?: p.lo) - p.lo) / (p.hi - p.lo)).toFloat().coerceIn(0f, 1f) },
                               modifier = Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp)),
-                              color = if (hit) Err else Pri, trackColor = Surf2
+                              color = if (hit) Err else MaterialTheme.colorScheme.primary, trackColor = MaterialTheme.colorScheme.surfaceVariant
                           )
                           val a = mn[p.k]; val z = mx[p.k]
                           Text(
                               if (a == null || z == null) "mín –   máx –" else "mín ${fmt(p, a)}   máx ${fmt(p, z)}",
                               style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace, fontSize = 10.sp),
-                              color = Mute
+                              color = MaterialTheme.colorScheme.onSurfaceVariant
                           )
                       }
                   }
@@ -1685,13 +1709,13 @@ jobs:
                       Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
                       verticalArrangement = Arrangement.spacedBy(12.dp)
                   ) {
-                      Card(colors = cc(), shape = RoundedCornerShape(22.dp), border = BorderStroke(1.dp, SurfBorder), modifier = Modifier.fillMaxWidth()) {
+                      Card(colors = cc(), shape = RoundedCornerShape(22.dp), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline), modifier = Modifier.fillMaxWidth()) {
                           Column(Modifier.padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                              Text("VELOCIDADE GPS", style = MaterialTheme.typography.labelMedium, color = Mute)
+                              Text("VELOCIDADE GPS", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                               Text(
                                   if (spd == null) "-- km/h" else "${"%.1f".format(Locale.US, spd)} km/h",
                                   style = MaterialTheme.typography.displayMedium.copy(fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Black),
-                                  color = if (gpsFresh) Pri else Mute
+                                  color = if (gpsFresh) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                               )
                               val gpsTxt = when {
                                   gpsMsg.isNotEmpty() -> gpsMsg
@@ -1699,13 +1723,13 @@ jobs:
                                   !gpsFresh -> "Aguardando sinal GPS (vá para céu aberto)…"
                                   else -> "GPS OK"
                               }
-                              Text(gpsTxt, style = MaterialTheme.typography.labelMedium, color = if (gpsFresh && gpsMsg.isEmpty()) Ok else Amb)
+                              Text(gpsTxt, style = MaterialTheme.typography.labelMedium, color = if (gpsFresh && gpsMsg.isEmpty()) Ok else MaterialTheme.colorScheme.secondary)
                               val statusTxt = when {
                                   dragRunning -> "CRONÔMETRO DISPARADO! ACELERE!"
                                   dragArmed -> "ARMADO: pare o carro e largue quando quiser"
                                   else -> "Toque em Armar Cronômetro para iniciar a puxada"
                               }
-                              Text(statusTxt, style = MaterialTheme.typography.bodyMedium, color = if (dragArmed) Ok else Mute)
+                              Text(statusTxt, style = MaterialTheme.typography.bodyMedium, color = if (dragArmed) Ok else MaterialTheme.colorScheme.onSurfaceVariant)
                               Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                                   Button(
                                       onClick = {
@@ -1722,10 +1746,6 @@ jobs:
                                       OutlinedButton(onClick = { dragArmed = false; dragRunning = false }) { Text("Cancelar") }
                                   }
                               }
-                              Text(
-                                  "Tempos medidos pelo GPS do celular (interpolados entre as leituras de 1 Hz). Use céu aberto e pista reta.",
-                                  style = MaterialTheme.typography.labelSmall, color = Mute
-                              )
                           }
                       }
 
@@ -1739,13 +1759,13 @@ jobs:
 
               @Composable
               private fun DragCard(title: String, sec: Double?, modifier: Modifier) {
-                  Card(colors = cc(), shape = RoundedCornerShape(18.dp), border = BorderStroke(1.dp, SurfBorder), modifier = modifier) {
+                  Card(colors = cc(), shape = RoundedCornerShape(18.dp), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline), modifier = modifier) {
                       Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                          Text(title, style = MaterialTheme.typography.labelLarge, color = Mute)
+                          Text(title, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
                           Text(
                               if (sec == null) "--.-- s" else String.format(Locale.US, "%.2f s", sec),
                               style = MaterialTheme.typography.headlineMedium.copy(fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold),
-                              color = if (sec != null) Ok else Ink
+                              color = if (sec != null) Ok else MaterialTheme.colorScheme.onSurface
                           )
                       }
                   }
@@ -1757,16 +1777,16 @@ jobs:
                       Modifier.fillMaxSize().padding(16.dp),
                       verticalArrangement = Arrangement.spacedBy(12.dp)
                   ) {
-                      Card(colors = cc(), shape = RoundedCornerShape(22.dp), border = BorderStroke(1.dp, SurfBorder), modifier = Modifier.fillMaxWidth()) {
+                      Card(colors = cc(), shape = RoundedCornerShape(22.dp), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline), modifier = Modifier.fillMaxWidth()) {
                           Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                               Text("Datalogger CSV (Telemetria MED17)", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                               Text(
                                   "Grava RPM, Boost 16-bit, Pressão de Rail, AFR, Avanço de Ignição, IAT, ECT e TPS em formato compatível com MegaLogViewer / Excel.",
-                                  style = MaterialTheme.typography.bodySmall, color = Mute
+                                  style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
                               )
                               Text(
                                   "Amostras na memória: ${logData.size} linhas",
-                                  style = MaterialTheme.typography.labelLarge.copy(fontFamily = FontFamily.Monospace), color = Pri
+                                  style = MaterialTheme.typography.labelLarge.copy(fontFamily = FontFamily.Monospace), color = MaterialTheme.colorScheme.primary
                               )
                               Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                   Button(
@@ -1774,7 +1794,7 @@ jobs:
                                           if (!isLogging) { logData.clear(); logStartMs = SystemClock.elapsedRealtime(); isLogging = true }
                                           else isLogging = false
                                       },
-                                      colors = ButtonDefaults.buttonColors(containerColor = if (isLogging) Err else Pri)
+                                      colors = ButtonDefaults.buttonColors(containerColor = if (isLogging) Err else MaterialTheme.colorScheme.primary)
                                   ) {
                                       Icon(if (isLogging) Icons.Rounded.Stop else Icons.Rounded.FiberManualRecord, contentDescription = null)
                                       Spacer(Modifier.width(6.dp))
@@ -1797,12 +1817,12 @@ jobs:
 
                       if (logData.isNotEmpty()) {
                           val last = logData.last()
-                          Card(colors = cc(Surf2), shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
+                          Card(colors = cc(MaterialTheme.colorScheme.surfaceVariant), shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
                               Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                  Text("Último frame gravado (${String.format(Locale.US, "%.1f", last.tMs / 1000.0)}s):", style = MaterialTheme.typography.labelMedium, color = Mute)
+                                  Text("Último frame gravado (${String.format(Locale.US, "%.1f", last.tMs / 1000.0)}s):", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                   Text(
                                       "RPM: ${last.rpm.toInt()} | Boost: ${"%.2f".format(Locale.US, last.boost)} bar | Rail: ${"%.1f".format(Locale.US, last.rail)} bar | AFR: ${"%.1f".format(Locale.US, last.afr)} | Ign: ${"%.1f".format(Locale.US, last.adv)}°",
-                                      style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace), color = Ink
+                                      style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace), color = MaterialTheme.colorScheme.onSurface
                                   )
                               }
                           }
@@ -1818,17 +1838,17 @@ jobs:
                       verticalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxSize()
                   ) {
                       item {
-                          Card(colors = cc(), shape = RoundedCornerShape(22.dp), border = BorderStroke(1.dp, SurfBorder), modifier = Modifier.fillMaxWidth()) {
+                          Card(colors = cc(), shape = RoundedCornerShape(22.dp), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline), modifier = Modifier.fillMaxWidth()) {
                               Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                                   Text("Shift Light (Corte Visual)", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                                  Text("Disparo em: $shiftRpm RPM", style = MaterialTheme.typography.labelLarge, color = Pri)
+                                  Text("Disparo em: $shiftRpm RPM", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
                                   Slider(
                                       value = shiftRpm.toFloat(),
                                       onValueChange = { shiftRpm = (it.toInt() / 100) * 100 },
                                       valueRange = 4500f..7000f,
                                       onValueChangeFinished = { save() }
                                   )
-                                  HorizontalDivider(color = SurfBorder)
+                                  HorizontalDivider(color = MaterialTheme.colorScheme.outline)
                                   Row(verticalAlignment = Alignment.CenterVertically) {
                                       Text("Alertas Sonoros de Segurança", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
                                       Switch(checked = master, onCheckedChange = { master = it; save() })
@@ -1844,7 +1864,7 @@ jobs:
                                       }
                                   }
                                   if (snd == 4) {
-                                      Text(if (uri == null) "Nenhum som escolhido" else soundTitle(), style = MaterialTheme.typography.bodySmall, color = Mute)
+                                      Text(if (uri == null) "Nenhum som escolhido" else soundTitle(), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                       OutlinedButton(onClick = {
                                           val it = Intent(RingtoneManager.ACTION_RINGTONE_PICKER)
                                               .putExtra(RingtoneManager.EXTRA_RINGTONE_TYPE, RingtoneManager.TYPE_ALL)
@@ -1855,7 +1875,7 @@ jobs:
                                       Text("Vibrar no alerta", modifier = Modifier.weight(1f))
                                       Switch(checked = vibe, onCheckedChange = { vibe = it; save() })
                                   }
-                                  Text("Cooldown entre alertas: $cool s", style = MaterialTheme.typography.labelLarge, color = Mute)
+                                  Text("Cooldown entre alertas: $cool s", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                   Slider(value = cool.toFloat(), onValueChange = { cool = it.toInt() }, valueRange = 2f..30f, steps = 27, onValueChangeFinished = { save() })
                                   OutlinedButton(onClick = { beep() }) { Text("Testar Alerta") }
                               }
@@ -1868,16 +1888,16 @@ jobs:
                           ) {
                               Text(
                                   "Watchdogs por sensor (toque para editar)",
-                                  style = MaterialTheme.typography.titleSmall, color = Mute, modifier = Modifier.weight(1f)
+                                  style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f)
                               )
                               TextButton(onClick = { prefillCmd = "22 D4 0A"; showAddPid = true }) {
-                                  Text("+ Novo PID", color = Pri)
+                                  Text("+ Novo PID", color = MaterialTheme.colorScheme.primary)
                               }
                           }
                       }
                       items(currentAll, key = { it.k }) { p ->
                           val a = alerts[p.k]
-                          Card(colors = cc(), shape = RoundedCornerShape(16.dp), border = BorderStroke(1.dp, SurfBorder), modifier = Modifier.fillMaxWidth()) {
+                          Card(colors = cc(), shape = RoundedCornerShape(16.dp), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline), modifier = Modifier.fillMaxWidth()) {
                               ListItem(
                                   colors = ListItemDefaults.colors(containerColor = Color.Transparent),
                                   modifier = Modifier.clickable { editing = p },
@@ -1886,7 +1906,7 @@ jobs:
                                       Text(
                                           if (a == null || !a.on) "Monitoramento desligado"
                                           else (if (a.above) "Alerta se > " else "Alerta se < ") + fmt(p, a.v) + " " + p.u,
-                                          color = if (a?.on == true) Pri else Mute
+                                          color = if (a?.on == true) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                                       )
                                   },
                                   trailingContent = {
@@ -1907,13 +1927,13 @@ jobs:
                   var above by remember { mutableStateOf(a.above) }
                   var txt by remember { mutableStateOf(fmt(p, a.v)) }
                   AlertDialog(
-                      containerColor = Surf2,
+                      containerColor = MaterialTheme.colorScheme.surfaceVariant,
                       onDismissRequest = { editing = null },
                       title = { Text("Watchdog: " + p.n) },
                       text = {
                           Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                               if (p.custom) {
-                                  Text("Comando UDS/OBD: ${p.c}", style = MaterialTheme.typography.labelMedium, color = Pri)
+                                  Text("Comando UDS/OBD: ${p.c}", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
                               }
                               Row(verticalAlignment = Alignment.CenterVertically) {
                                   Text("Habilitar Alerta", modifier = Modifier.weight(1f))
@@ -1957,14 +1977,42 @@ jobs:
               }
 
               @Composable
-              private fun Dtcs() {
+              private fun EcuAndAboutScreen() {
                   var confirm by remember { mutableStateOf(false) }
                   val ok = state == 2 && sock != null
                   Column(
                       Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
-                      verticalArrangement = Arrangement.spacedBy(10.dp)
+                      verticalArrangement = Arrangement.spacedBy(12.dp)
                   ) {
-                      Card(colors = cc(), shape = RoundedCornerShape(20.dp), border = BorderStroke(1.dp, SurfBorder), modifier = Modifier.fillMaxWidth()) {
+                      // Customização visual (Tema e Cores)
+                      Card(colors = cc(), shape = RoundedCornerShape(20.dp), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline), modifier = Modifier.fillMaxWidth()) {
+                          Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                              Text("Personalização Visual", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                              Text("Modo de Tema", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                              Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                  listOf("Automático (Sistema)", "Sempre Escuro", "Sempre Claro").forEachIndexed { idx, label ->
+                                      FilterChip(
+                                          selected = darkThemeOpt == idx,
+                                          onClick = { darkThemeOpt = idx; save() },
+                                          label = { Text(label, style = MaterialTheme.typography.labelSmall) }
+                                      )
+                                  }
+                              }
+                              Text("Cor de Destaque (Accent)", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                              Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                  val accents = listOf("Ciano", "Âmbar", "Verde", "Vermelho", "Azul")
+                                  accents.forEachIndexed { idx, label ->
+                                      FilterChip(
+                                          selected = accentColorIdx == idx,
+                                          onClick = { accentColorIdx = idx; save() },
+                                          label = { Text(label, style = MaterialTheme.typography.labelSmall) }
+                                      )
+                                  }
+                              }
+                          }
+                      }
+
+                      Card(colors = cc(), shape = RoundedCornerShape(20.dp), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline), modifier = Modifier.fillMaxWidth()) {
                           Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                               Text("Diagnóstico Bosch MED17.4.2", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                               Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1986,9 +2034,9 @@ jobs:
                           l == null -> Text(
                               if (ok) "Toque em Ler DTCs para varrer a memória de avarias."
                               else "Conecte ao ELM327 com a ignição ligada para ler códigos da injeção.",
-                              color = Mute, modifier = Modifier.padding(8.dp)
+                              color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(8.dp)
                           )
-                          l.isEmpty() -> Card(colors = cc(), shape = RoundedCornerShape(18.dp), border = BorderStroke(1.dp, Ok.copy(alpha = 0.5f)), modifier = Modifier.fillMaxWidth()) {
+                          l.isEmpty() -> Card(colors = cc(MaterialTheme.colorScheme.surfaceVariant), shape = RoundedCornerShape(18.dp), border = BorderStroke(1.dp, Ok.copy(alpha = 0.5f)), modifier = Modifier.fillMaxWidth()) {
                               Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                                   Icon(Icons.Rounded.CheckCircle, contentDescription = null, tint = Ok)
                                   Spacer(Modifier.width(10.dp))
@@ -2007,9 +2055,25 @@ jobs:
                               }
                           }
                       }
+
+                      // Tela de Sobre e Créditos
+                      Card(colors = cc(), shape = RoundedCornerShape(20.dp), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline), modifier = Modifier.fillMaxWidth()) {
+                          Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                              Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                  Icon(Icons.Rounded.Info, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                                  Text("Sobre o MED17 Dash", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                              }
+                              Text("Versão do App: 7.0 (Build Pro)", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                              Text("Desenvolvido por: Giovanni Stocco", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+                              Text(
+                                  "Software especializado de telemetria automotiva, leitura em tempo real via protocolo UDS (Modo 22) e OBD2 para centrais de injeção Bosch MED17.4.2 (motores THP / PSA).",
+                                  style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+                              )
+                          }
+                      }
                   }
                   if (confirm) AlertDialog(
-                      containerColor = Surf2,
+                      containerColor = MaterialTheme.colorScheme.surfaceVariant,
                       onDismissRequest = { confirm = false },
                       title = { Text("Limpar Avarias (Modo 04)?") },
                       text = { Text("Isso apagará a luz de injeção (MIL) e os parâmetros de Freeze Frame da MED17.4.2.") },
