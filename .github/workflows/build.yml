@@ -278,7 +278,7 @@ jobs:
                   setState(1, "Conectando…")
                   Thread {
                       try {
-                          adapter().cancelDiscovery()
+                          // sem busca ativa: nao precisa cancelar descoberta (evita exigir BLUETOOTH_SCAN)
                           var s = d.createRfcommSocketToServiceRecord(spp)
                           try { s.connect() } catch (x: Exception) {
                               try { s.close() } catch (y: Exception) {}
