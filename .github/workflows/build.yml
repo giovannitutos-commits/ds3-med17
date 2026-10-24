@@ -15,7 +15,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.7
-      - name: Gerar projeto Android nativo (MED17 Dash v7.3)
+      - name: Gerar projeto Android nativo (MED17 Dash v7.4)
         run: |
           mkdir -p app/src/main/java/br/local/ds3 app/src/main/res/values app/src/main/res/drawable app/src/main/res/mipmap-anydpi-v26
           cat > settings.gradle.kts <<'EOF'
@@ -46,8 +46,8 @@ jobs:
                   applicationId = "br.local.ds3"
                   minSdk = 26
                   targetSdk = 34
-                  versionCode = 12
-                  versionName = "7.3"
+                  versionCode = 13
+                  versionName = "7.4"
               }
               compileOptions {
                   sourceCompatibility = JavaVersion.VERSION_17
@@ -197,7 +197,7 @@ jobs:
 
           data class Al(val on: Boolean, val above: Boolean, val v: Double)
           data class LogRow(
-              val tMs: Long, val rpm: Double, val boost: Double, val rail: Double,
+              val tMs: Long, val rpm: Long, val boost: Double, val rail: Double,
               val afr: Double, val adv: Double, val iat: Double, val ect: Double, val tps: Double
           )
           data class TermLine(val time: String, val tx: String, val rx: String, val decoded: String, val isErr: Boolean)
@@ -205,6 +205,7 @@ jobs:
           private val ErrCol = Color(0xFFFF3D57)
           private val OkCol = Color(0xFF00E676)
 
+          @OptIn(ExperimentalMaterial3Api::class)
           class MainActivity : ComponentActivity() {
               private val spp = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
               private val boostP = P("boost", "Boost Relativo", "bar", "", 2, -0.8, 2.5, true) { 0.0 }
@@ -375,7 +376,7 @@ jobs:
                               logData.forEach { r ->
                                   sb.append(
                                       String.format(
-                                          Locale.US, "%.3f,%.0f,%.2f,%.1f,%.2f,%.1f,%.0f,%.0f,%.1f\n",
+                                          Locale.US, "%.3f,%d,%.2f,%.1f,%.2f,%.1f,%.0f,%.0f,%.1f\n",
                                           r.tMs / 1000.0, r.rpm, r.boost, r.rail, r.afr, r.adv, r.iat, r.ect, r.tps
                                       )
                                   )
@@ -789,7 +790,7 @@ jobs:
                       logData.add(
                           LogRow(
                               tMs = now - logStartMs,
-                              rpm = live["rpm"] ?: 0.0,
+                              rpm = (live["rpm"] ?: 0.0).toLong(),
                               boost = live["boost"] ?: 0.0,
                               rail = live["rail"] ?: 0.0,
                               afr = live["afr"] ?: 14.7,
@@ -1823,7 +1824,7 @@ jobs:
                               Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                   Text("Último frame gravado (${String.format(Locale.US, "%.1f", last.tMs / 1000.0)}s):", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                   Text(
-                                      "RPM: ${last.rpm.toInt()} | Boost: ${"%.2f".format(Locale.US, last.boost)} bar | Rail: ${"%.1f".format(Locale.US, last.rail)} bar | AFR: ${"%.1f".format(Locale.US, last.afr)} | Ign: ${"%.1f".format(Locale.US, last.adv)}°",
+                                      "RPM: ${last.rpm} | Boost: ${"%.2f".format(Locale.US, last.boost)} bar | Rail: ${"%.1f".format(Locale.US, last.rail)} bar | AFR: ${"%.1f".format(Locale.US, last.afr)} | Ign: ${"%.1f".format(Locale.US, last.adv)}°",
                                       style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace), color = MaterialTheme.colorScheme.onSurface
                                   )
                               }
@@ -1979,13 +1980,10 @@ jobs:
               }
 
               @Composable
-              private fun AboutDialogContent(
-                  ok: Boolean,
-                  dtcList: List<String>?,
-                  thpMap: Map<String, String>,
-                  onReadDtc: () -> Unit,
-                  onClearDtcConfirm: () -> Unit
-              ) {
+              private fun EcuAndAboutScreen() {
+                  var confirm by remember { mutableStateOf(false) }
+                  val ok = state == 2 && sock != null
+                  val dtcList = dtcs
                   Column(
                       Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
                       verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -2021,12 +2019,12 @@ jobs:
                           Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                               Text("Diagnóstico Bosch MED17.4.2", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                               Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                  Button(enabled = ok, onClick = onReadDtc) {
+                                  Button(enabled = ok, onClick = { readDtc() }) {
                                       Icon(Icons.Rounded.Search, contentDescription = null)
                                       Spacer(Modifier.width(6.dp))
                                       Text("Ler DTCs")
                                   }
-                                  OutlinedButton(enabled = ok, onClick = onClearDtcConfirm) {
+                                  OutlinedButton(enabled = ok, onClick = { confirm = true }) {
                                       Icon(Icons.Rounded.DeleteSweep, contentDescription = null)
                                       Spacer(Modifier.width(6.dp))
                                       Text("Limpar ECU")
@@ -2055,7 +2053,7 @@ jobs:
                                           Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                               Text(code, style = MaterialTheme.typography.titleLarge.copy(fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold), color = ErrCol)
                                               Text(
-                                                  thpMap[code] ?: "Código de falha OBD2 genérico ou específico PSA.",
+                                                  thpDtcMap[code] ?: "Código de falha OBD2 genérico ou específico PSA.",
                                                   style = MaterialTheme.typography.bodyMedium, color = Color(0xFFFFDAD6)
                                               )
                                           }
@@ -2071,7 +2069,7 @@ jobs:
                                   Icon(Icons.Rounded.Info, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                                   Text("Sobre o MED17 Dash", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                               }
-                              Text("Versão do App: 7.3 (Build Pro)", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                              Text("Versão do App: 7.4 (Build Pro)", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
                               Text("Desenvolvido por: Giovanni Stocco", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
                               Text(
                                   "Software especializado de telemetria automotiva, leitura em tempo real via protocolo UDS (Modo 22) e OBD2 para centrais de injeção Bosch MED17.4.2 (motores THP / PSA).",
@@ -2080,19 +2078,6 @@ jobs:
                           }
                       }
                   }
-              }
-
-              @Composable
-              private fun EcuAndAboutScreen() {
-                  var confirm by remember { mutableStateOf(false) }
-                  val ok = state == 2 && sock != null
-                  AboutDialogContent(
-                      ok = ok,
-                      dtcList = dtcs,
-                      thpMap = thpDtcMap,
-                      onReadDtc = { readDtc() },
-                      onClearDtcConfirm = { confirm = true }
-                  )
                   if (confirm) AlertDialog(
                       containerColor = MaterialTheme.colorScheme.surfaceVariant,
                       onDismissRequest = { confirm = false },
