@@ -107,6 +107,7 @@ jobs:
           import androidx.activity.enableEdgeToEdge
           import androidx.activity.result.contract.ActivityResultContracts
           import androidx.compose.foundation.clickable
+          import androidx.compose.foundation.isSystemInDarkTheme
           import androidx.compose.foundation.layout.*
           import androidx.compose.foundation.lazy.LazyColumn
           import androidx.compose.foundation.lazy.grid.*
@@ -249,7 +250,7 @@ jobs:
                   } else then()
               }
 
-              override fun onRequestPermissionsResult(rc: Int, p: Array<out String>, r: IntArray) {
+              override fun onRequestPermissionsResult(rc: Int, p: Array<String>, r: IntArray) {
                   super.onRequestPermissionsResult(rc, p, r)
                   if (r.isNotEmpty() && r[0] == PackageManager.PERMISSION_GRANTED) pending?.invoke()
                   else setState(0, "Permissão negada. Ative Dispositivos próximos nas permissões do app.")
