@@ -8,30 +8,343 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 17
-      - name: Criar projeto Capacitor
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.7
+      - name: Gerar projeto Android nativo (Kotlin)
         run: |
-          mkdir -p app/www
-          cp index.html app/www/index.html
-          cd app
-          npm init -y
-          npm i @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6 cordova-plugin-bluetooth-classic-serial-port
-          npx cap init "DS3 MED17" br.local.ds3med17 --web-dir www
-          npx cap add android
-          npx cap sync android
-          sed -i 's#<application#<uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" />\n    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />\n    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="33" />\n    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="33" />\n    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="34" />\n    <application#' android/app/src/main/AndroidManifest.xml
+          mkdir -p app/src/main/java/br/local/ds3
+          cat > settings.gradle.kts <<'EOF'
+          pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+          dependencyResolutionManagement { repositories { google(); mavenCentral() } }
+          rootProject.name = "DS3"
+          include(":app")
+          EOF
+          cat > build.gradle.kts <<'EOF'
+          plugins {
+              id("com.android.application") version "8.5.2" apply false
+              id("org.jetbrains.kotlin.android") version "1.9.24" apply false
+          }
+          EOF
+          cat > gradle.properties <<'EOF'
+          org.gradle.jvmargs=-Xmx2g
+          android.useAndroidX=false
+          EOF
+          cat > app/build.gradle.kts <<'EOF'
+          plugins {
+              id("com.android.application")
+              id("org.jetbrains.kotlin.android")
+          }
+          android {
+              namespace = "br.local.ds3"
+              compileSdk = 34
+              defaultConfig {
+                  applicationId = "br.local.ds3"
+                  minSdk = 24
+                  targetSdk = 34
+                  versionCode = 1
+                  versionName = "1.0"
+              }
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+              kotlinOptions { jvmTarget = "17" }
+          }
+          EOF
+          cat > app/src/main/AndroidManifest.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+              <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
+              <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+              <application android:label="DS3 MED17" android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+                  <activity android:name=".MainActivity" android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+          cat > app/src/main/java/br/local/ds3/MainActivity.kt <<'EOF'
+          package br.local.ds3
+
+          import android.Manifest
+          import android.app.Activity
+          import android.app.AlertDialog
+          import android.bluetooth.BluetoothAdapter
+          import android.bluetooth.BluetoothDevice
+          import android.bluetooth.BluetoothManager
+          import android.bluetooth.BluetoothSocket
+          import android.content.pm.PackageManager
+          import android.graphics.Color
+          import android.graphics.Typeface
+          import android.graphics.drawable.GradientDrawable
+          import android.os.Build
+          import android.os.Bundle
+          import android.util.TypedValue
+          import android.widget.*
+          import java.io.InputStream
+          import java.io.OutputStream
+          import java.util.UUID
+          import kotlin.math.sin
+
+          class P(val k: String, val n: String, val u: String, val c: String, val d: Int, val lo: Double, val hi: Double, val f: (IntArray) -> Double)
+
+          class MainActivity : Activity() {
+              private val spp = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
+              private val boostP = P("boost", "Pressão do turbo (relativa)", "bar", "", 2, -1.0, 2.0) { 0.0 }
+              private val pids = listOf(
+                  P("rpm", "Rotação", "rpm", "010C", 0, 0.0, 7000.0) { (it[0] * 256 + it[1]) / 4.0 },
+                  P("spd", "Velocidade", "km/h", "010D", 0, 0.0, 220.0) { it[0].toDouble() },
+                  P("ect", "Água do motor", "°C", "0105", 0, 0.0, 120.0) { it[0] - 40.0 },
+                  P("iat", "Ar de admissão", "°C", "010F", 0, 0.0, 80.0) { it[0] - 40.0 },
+                  P("map", "Pressão no coletor", "kPa", "010B", 0, 0.0, 250.0) { it[0].toDouble() },
+                  P("tps", "Borboleta", "%", "0111", 1, 0.0, 100.0) { it[0] * 100 / 255.0 },
+                  P("ld", "Carga do motor", "%", "0104", 1, 0.0, 100.0) { it[0] * 100 / 255.0 },
+                  P("adv", "Avanço de ignição", "°", "010E", 1, -10.0, 50.0) { it[0] / 2.0 - 64 },
+                  P("st", "Correção curta", "%", "0106", 1, -25.0, 25.0) { (it[0] - 128) * 100 / 128.0 },
+                  P("lt", "Correção longa", "%", "0107", 1, -25.0, 25.0) { (it[0] - 128) * 100 / 128.0 },
+                  P("maf", "Fluxo de ar", "g/s", "0110", 1, 0.0, 250.0) { (it[0] * 256 + it[1]) / 100.0 },
+                  P("lam", "Lambda", "λ", "0124", 2, 0.6, 1.4) { (it[0] * 256 + it[1]) * 2 / 65536.0 },
+                  P("vb", "Tensão da ECU", "V", "0142", 1, 8.0, 16.0) { (it[0] * 256 + it[1]) / 1000.0 }
+              )
+              private val lock = Any()
+              private val vals = HashMap<String, TextView>()
+              private val mms = HashMap<String, TextView>()
+              private val mm = HashMap<String, DoubleArray>()
+              private val fails = HashMap<String, Int>()
+              private var sock: BluetoothSocket? = null
+              private var inp: InputStream? = null
+              private var out: OutputStream? = null
+              @Volatile private var running = false
+              private var baro = 101.0
+              private var pending: (() -> Unit)? = null
+              private var state = 0
+              private lateinit var status: TextView
+              private lateinit var bConn: Button
+              private lateinit var bDemo: Button
+              private lateinit var bDtc: Button
+
+              private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+              private fun txt(s: String, sp: Float, col: String, bold: Boolean = false) = TextView(this).apply {
+                  text = s
+                  setTextSize(TypedValue.COMPLEX_UNIT_SP, sp)
+                  setTextColor(Color.parseColor(col))
+                  if (bold) typeface = Typeface.DEFAULT_BOLD
+              }
+
+              override fun onCreate(b: Bundle?) {
+                  super.onCreate(b)
+                  val root = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      setPadding(dp(12), dp(36), dp(12), dp(20))
+                      setBackgroundColor(Color.parseColor("#0F1318"))
+                  }
+                  root.addView(txt("Citroën DS3 – MED17.4.2", 24f, "#E6EBEE", true))
+                  status = txt("Desconectado", 14f, "#8D9AA5").apply { setPadding(0, dp(4), 0, dp(10)) }
+                  root.addView(status)
+                  val row = LinearLayout(this)
+                  bConn = Button(this).apply { text = "Conectar"; setOnClickListener { if (state == 2) stop("Desconectado") else needPerm { pick() } } }
+                  bDemo = Button(this).apply { text = "Demo"; setOnClickListener { demo() } }
+                  bDtc = Button(this).apply { text = "Falhas"; isEnabled = false; setOnClickListener { dtc() } }
+                  for (x in listOf(bConn, bDemo, bDtc)) row.addView(x, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+                  root.addView(row)
+                  val grid = GridLayout(this).apply { columnCount = 2 }
+                  for (p in listOf(boostP) + pids) grid.addView(tile(p), lp(p === boostP))
+                  root.addView(grid)
+                  setContentView(ScrollView(this).apply { setBackgroundColor(Color.parseColor("#0F1318")); addView(root) })
+              }
+
+              private fun tile(p: P): LinearLayout {
+                  val c = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      setPadding(dp(12), dp(10), dp(12), dp(10))
+                      background = GradientDrawable().apply { setColor(Color.parseColor("#171D24")); cornerRadius = dp(10).toFloat() }
+                  }
+                  val big = p === boostP
+                  c.addView(txt(p.n + " (" + p.u + ")", 13f, "#8D9AA5"))
+                  val v = txt("–", if (big) 44f else 30f, if (big) "#4CC3E0" else "#E6EBEE")
+                  val m = txt("mín – máx –", 11f, "#8D9AA5")
+                  vals[p.k] = v
+                  mms[p.k] = m
+                  c.addView(v)
+                  c.addView(m)
+                  return c
+              }
+
+              private fun lp(big: Boolean) = GridLayout.LayoutParams(
+                  GridLayout.spec(GridLayout.UNDEFINED),
+                  GridLayout.spec(GridLayout.UNDEFINED, if (big) 2 else 1, 1f)
+              ).apply { width = 0; setMargins(dp(4), dp(4), dp(4), dp(4)) }
+
+              private fun setState(s: Int, msg: String) = runOnUiThread {
+                  state = s
+                  status.text = msg
+                  bConn.text = if (s == 2) "Desconectar" else "Conectar"
+                  bConn.isEnabled = s != 1
+                  bDemo.isEnabled = s == 0
+                  bDtc.isEnabled = s == 2 && sock != null
+              }
+
+              private fun needPerm(then: () -> Unit) {
+                  if (Build.VERSION.SDK_INT >= 31 && checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+                      pending = then
+                      requestPermissions(arrayOf(Manifest.permission.BLUETOOTH_CONNECT), 1)
+                  } else then()
+              }
+
+              override fun onRequestPermissionsResult(rc: Int, p: Array<out String>, r: IntArray) {
+                  if (r.isNotEmpty() && r[0] == PackageManager.PERMISSION_GRANTED) pending?.invoke()
+                  else setState(0, "Permissão de Bluetooth negada. Ative Dispositivos próximos nas permissões do app.")
+                  pending = null
+              }
+
+              private fun pick() {
+                  val ad = (getSystemService(BLUETOOTH_SERVICE) as BluetoothManager).adapter
+                  if (ad == null || !ad.isEnabled) { setState(0, "Ligue o Bluetooth do celular."); return }
+                  val devs = ad.bondedDevices.toList()
+                  if (devs.isEmpty()) { setState(0, "Nenhum adaptador pareado. Pareie o ELM327 nas configurações (PIN 1234 ou 0000)."); return }
+                  AlertDialog.Builder(this).setTitle("Escolha o adaptador")
+                      .setItems(devs.map { it.name ?: it.address }.toTypedArray()) { _, i -> connect(devs[i], ad) }
+                      .show()
+              }
+
+              private fun connect(d: BluetoothDevice, ad: BluetoothAdapter) {
+                  setState(1, "Conectando…")
+                  Thread {
+                      try {
+                          ad.cancelDiscovery()
+                          var s = d.createRfcommSocketToServiceRecord(spp)
+                          try { s.connect() } catch (x: Exception) {
+                              try { s.close() } catch (y: Exception) {}
+                              s = d.createInsecureRfcommSocketToServiceRecord(spp)
+                              s.connect()
+                          }
+                          sock = s; inp = s.inputStream; out = s.outputStream
+                          for (c in listOf("ATZ", "ATE0", "ATL0", "ATS0", "ATH0", "ATSP6")) ask(c)
+                          var r = ask("0100", 8000)
+                          if (!r.replace(" ", "").contains("4100")) { ask("ATSP0"); r = ask("0100", 15000) }
+                          if (!r.replace(" ", "").contains("4100")) throw Exception("ECU não respondeu. Ligue a ignição.")
+                          bytes(ask("0133"), "33")?.let { baro = it[0].toDouble() }
+                          fails.clear(); mm.clear()
+                          running = true
+                          setState(2, "Conectado a " + (d.name ?: d.address))
+                          loop()
+                      } catch (e: Exception) {
+                          close()
+                          setState(0, "Erro: " + e.message)
+                      }
+                  }.start()
+              }
+
+              private fun ask(c: String, wait: Long = 5000): String {
+                  val i = inp!!
+                  val o = out!!
+                  while (i.available() > 0) i.read()
+                  o.write((c + "\r").toByteArray()); o.flush()
+                  val sb = StringBuilder()
+                  val t = System.currentTimeMillis()
+                  while (System.currentTimeMillis() - t < wait) {
+                      if (i.available() > 0) { val ch = i.read(); if (ch == 62) break; sb.append(ch.toChar()) } else Thread.sleep(8)
+                  }
+                  return sb.toString()
+              }
+
+              private fun bytes(r: String, pid: String): IntArray? {
+                  for (l in r.split('\r', '\n')) {
+                      val s = l.replace(" ", "").uppercase()
+                      val i = s.indexOf("41" + pid)
+                      if (i >= 0) {
+                          val h = s.substring(i + 4)
+                          return try { IntArray(h.length / 2) { h.substring(it * 2, it * 2 + 2).toInt(16) } } catch (x: Exception) { null }
+                      }
+                  }
+                  return null
+              }
+
+              private fun loop() {
+                  while (running) {
+                      for (p in pids) {
+                          if (!running) return
+                          if ((fails[p.k] ?: 0) >= 3) continue
+                          try {
+                              val b = synchronized(lock) { bytes(ask(p.c), p.c.substring(2)) }
+                              if (b == null) { fails[p.k] = (fails[p.k] ?: 0) + 1; continue }
+                              val v = runCatching { p.f(b) }.getOrNull() ?: continue
+                              show(p, v)
+                              if (p.k == "map") show(boostP, (v - baro) / 100)
+                          } catch (e: Exception) {
+                              if (running) { running = false; close(); setState(0, "Conexão perdida") }
+                              return
+                          }
+                      }
+                  }
+              }
+
+              private fun show(p: P, v: Double) {
+                  val m = mm.getOrPut(p.k) { doubleArrayOf(v, v) }
+                  m[0] = minOf(m[0], v); m[1] = maxOf(m[1], v)
+                  runOnUiThread {
+                      vals[p.k]?.text = "%.${p.d}f".format(v)
+                      mms[p.k]?.text = "mín %.${p.d}f   máx %.${p.d}f".format(m[0], m[1])
+                  }
+              }
+
+              private fun demo() {
+                  running = true
+                  mm.clear()
+                  setState(2, "Modo demonstração (valores simulados)")
+                  Thread {
+                      val t0 = System.currentTimeMillis()
+                      while (running) {
+                          val t = (System.currentTimeMillis() - t0) / 1000.0
+                          pids.forEachIndexed { i, p ->
+                              val v = when (p.k) {
+                                  "ect" -> 88 + 2 * sin(t / 4)
+                                  "lam" -> 1 + 0.03 * sin(t * 1.4)
+                                  else -> p.lo + (p.hi - p.lo) * (0.18 + 0.12 * sin(t * (0.4 + i * 0.13) + i))
+                              }
+                              show(p, v)
+                              if (p.k == "map") show(boostP, (v - 101) / 100)
+                          }
+                          Thread.sleep(250)
+                      }
+                  }.start()
+              }
+
+              private fun dtc() {
+                  Thread {
+                      val r = try { synchronized(lock) { ask("03") } } catch (e: Exception) { "" }
+                      val s = r.split('\r', '\n').map { it.trim() }
+                          .filter { it.isNotEmpty() && !Regex("[0-9A-Fa-f]{3}").matches(it) }
+                          .joinToString("") { it.replace(Regex("^\\d:"), "").replace(" ", "") }.uppercase()
+                      val i = s.indexOf("43")
+                      val codes = if (i < 0) emptyList() else s.substring(i + 4).chunked(4).filter { it.length == 4 && it != "0000" }.map {
+                          val n = it.toInt(16)
+                          "PCBU"[n shr 14].toString() + ((n shr 12) and 3) + it.substring(1)
+                      }
+                      runOnUiThread {
+                          AlertDialog.Builder(this).setTitle("Códigos de falha")
+                              .setMessage(if (codes.isEmpty()) "Nenhuma falha armazenada." else codes.joinToString("\n"))
+                              .setPositiveButton("OK", null).show()
+                      }
+                  }.start()
+              }
+
+              private fun close() { try { sock?.close() } catch (x: Exception) {}; sock = null }
+              private fun stop(msg: String) { running = false; close(); setState(0, msg) }
+          }
+          EOF
       - name: Compilar APK
-        run: |
-          cd app/android
-          chmod +x gradlew
-          ./gradlew assembleDebug
+        run: gradle assembleDebug --no-daemon
       - uses: actions/upload-artifact@v4
         with:
           name: ds3-med17-apk
-          path: app/android/app/build/outputs/apk/debug/app-debug.apk
+          path: app/build/outputs/apk/debug/app-debug.apk
