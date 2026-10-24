@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>DS3 MED17.4.2 – parâmetros</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@400;500;600&display=swap">
+<style>
+:root{--bg:#eef1f3;--panel:#fff;--ink:#12181d;--mute:#56636d;--line:#d3dadf;--acc:#0a6e8a;--warn:#b93d0b;--ok:#157a3b;--track:#e3e8eb;
+color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0f1318;--panel:#171d24;--ink:#e6ebee;--mute:#8d9aa5;--line:#28313b;--acc:#4cc3e0;--warn:#ff9a57;--ok:#5fd08a;--track:#222b34;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#0f1318;--panel:#171d24;--ink:#e6ebee;--mute:#8d9aa5;--line:#28313b;--acc:#4cc3e0;--warn:#ff9a57;--ok:#5fd08a;--track:#222b34;color-scheme:dark}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:"Barlow Semi Condensed",system-ui,"Segoe UI",sans-serif;font-size:16px;line-height:1.4}
+main{max-width:860px;margin:0 auto;padding:16px 14px 32px}
+h1{font-size:26px;font-weight:600;margin:4px 0 2px}
+h2{font-size:18px;font-weight:600;margin:0 0 8px}
+.sub{color:var(--mute);margin:0 0 14px}
+.bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:12px}
+button,select,input{font:inherit;color:var(--ink)}
+[hidden]{display:none!important}
+button{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:9px 14px;cursor:pointer;min-height:42px}
+button.p{background:var(--acc);border-color:var(--acc);color:#fff}
+:root:not([data-theme="light"]) button.p{color:#06222b}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+button:disabled{opacity:.45;cursor:default}
+select,input{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:9px 10px;min-height:42px}
+#st{display:flex;align-items:center;gap:8px;margin:0 0 14px}
+#st i{width:10px;height:10px;border-radius:50%;background:var(--mute)}
+#st.on i{background:var(--ok)}#st.err i{background:var(--warn)}
+.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+@media(min-width:640px){.grid{grid-template-columns:repeat(4,1fr)}}
+.t{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+.t.big{grid-column:span 2;border-color:var(--acc)}
+.t .l{color:var(--mute);font-size:14px}
+.t .v{font-size:32px;font-weight:500;line-height:1.1;font-variant-numeric:tabular-nums}
+.t.big .v{font-size:56px}
+.t .u{font-size:14px;color:var(--mute);margin-left:4px}
+.tr{height:5px;background:var(--track);border-radius:3px;margin:8px 0 4px;overflow:hidden}
+.tr b{display:block;height:100%;width:0;background:var(--acc);transition:width .2s}
+.mm{font-size:12px;color:var(--mute);font-variant-numeric:tabular-nums}
+.t.off .v{color:var(--mute)}
+section{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px;margin-top:14px}
+#dtc{margin:8px 0 0;padding-left:18px}
+#con{height:170px;overflow:auto;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px;font:13px/1.35 ui-monospace,Menlo,Consolas,monospace;white-space:pre-wrap;margin:8px 0}
+.row{display:flex;gap:8px}.row input{flex:1;min-width:0}
+.note{color:var(--mute);font-size:14px;margin:8px 0 0}
+</style>
+</head>
+<body>
+<main>
+<h1>Citroën DS3 – MED17.4.2</h1>
+<p class="sub">Leitura de parâmetros em tempo real pela porta OBD-II com adaptador ELM327.</p>
+
+<div class="bar">
+  <button class="p" id="bBle">Conectar Bluetooth</button>
+  <button id="bSer">Conectar USB/serial</button>
+  <button id="bCls">Bluetooth clássico (APK)</button>
+  <select id="baud" aria-label="Velocidade serial"><option>38400</option><option>115200</option><option>9600</option></select>
+  <button id="bDemo">Demonstração</button>
+  <button id="bOff" disabled>Desconectar</button>
+</div>
+<p id="st"><i></i><span id="stx">Desconectado</span></p>
+
+<div class="bar" id="devs" hidden></div>
+<div class="grid" id="grid"></div>
+
+<section>
+  <h2>Códigos de falha</h2>
+  <button id="bDtc" disabled>Ler falhas</button>
+  <ul id="dtc"></ul>
+</section>
+
+<section>
+  <h2>Comando manual</h2>
+  <div id="con" aria-live="polite"></div>
+  <div class="row"><input id="cmd" placeholder="Ex.: 0100, ATSH7E0, 22F190" autocapitalize="characters" autocomplete="off"><button id="bSend" disabled>Enviar</button></div>
+  <p class="note">Parâmetros específicos da PSA (serviço 22 na ECU 7E0) exigem identificadores que variam por versão de software. Use este campo para testar os que você tiver.</p>
+</section>
+</main>
+
+<script>
+const $=id=>document.getElementById(id);
+const P=[
+ {k:'rpm',n:'Rotação',u:'rpm',c:'010C',f:b=>(b[0]*256+b[1])/4,lo:0,hi:7000,d:0},
+ {k:'spd',n:'Velocidade',u:'km/h',c:'010D',f:b=>b[0],lo:0,hi:220,d:0},
+ {k:'ect',n:'Água do motor',u:'°C',c:'0105',f:b=>b[0]-40,lo:0,hi:120,d:0},
+ {k:'iat',n:'Ar de admissão',u:'°C',c:'010F',f:b=>b[0]-40,lo:0,hi:80,d:0},
+ {k:'map',n:'Pressão no coletor',u:'kPa',c:'010B',f:b=>b[0],lo:0,hi:250,d:0},
+ {k:'tps',n:'Borboleta',u:'%',c:'0111',f:b=>b[0]*100/255,lo:0,hi:100,d:1},
+ {k:'ld',n:'Carga do motor',u:'%',c:'0104',f:b=>b[0]*100/255,lo:0,hi:100,d:1},
+ {k:'adv',n:'Avanço de ignição',u:'°',c:'010E',f:b=>b[0]/2-64,lo:-10,hi:50,d:1},
+ {k:'st',n:'Correção curta',u:'%',c:'0106',f:b=>(b[0]-128)*100/128,lo:-25,hi:25,d:1},
+ {k:'lt',n:'Correção longa',u:'%',c:'0107',f:b=>(b[0]-128)*100/128,lo:-25,hi:25,d:1},
+ {k:'maf',n:'Fluxo de ar',u:'g/s',c:'0110',f:b=>(b[0]*256+b[1])/100,lo:0,hi:250,d:1},
+ {k:'lam',n:'Lambda',u:'λ',c:'0124',f:b=>(b[0]*256+b[1])*2/65536,lo:0.6,hi:1.4,d:2},
+ {k:'vb',n:'Tensão da ECU',u:'V',c:'0142',f:b=>(b[0]*256+b[1])/1000,lo:8,hi:16,d:1}
+];
+const BOOST={k:'boost',n:'Pressão do turbo (relativa)',u:'bar',lo:-1,hi:2,d:2,big:1};
+const ALL=[BOOST,...P];
+const mm={};
+$('grid').innerHTML=ALL.map(p=>`<div class="t off${p.big?' big':''}" id="t-${p.k}"><div class="l">${p.n}</div><div><span class="v" id="v-${p.k}">–</span><span class="u">${p.u}</span></div><div class="tr"><b id="b-${p.k}"></b></div><div class="mm" id="m-${p.k}">mín – máx –</div></div>`).join('');
+
+function show(p,v){
+  const t=$('t-'+p.k);
+  if(v==null||isNaN(v)){t.classList.add('off');$('v-'+p.k).textContent='–';return}
+  t.classList.remove('off');
+  $('v-'+p.k).textContent=v.toFixed(p.d);
+  $('b-'+p.k).style.width=Math.max(0,Math.min(100,(v-p.lo)/(p.hi-p.lo)*100))+'%';
+  const m=mm[p.k]||(mm[p.k]={a:v,b:v});m.a=Math.min(m.a,v);m.b=Math.max(m.b,v);
+  $('m-'+p.k).textContent='mín '+m.a.toFixed(p.d)+' – máx '+m.b.toFixed(p.d);
+}
+function status(txt,cls){$('stx').textContent=txt;$('st').className=cls||''}
+function log(s){const c=$('con');c.textContent+=s+'\n';c.scrollTop=c.scrollHeight}
+
+// transporte
+const enc=new TextEncoder(),dec=new TextDecoder();
+let send=null,disc=null,rx='',waiter=null,running=false,demo=false,chain=Promise.resolve(),baro=101;
+function onData(t){rx+=t;if(rx.includes('>')&&waiter)waiter()}
+function _ask(c){return new Promise((res,rej)=>{
+  rx='';
+  const to=setTimeout(()=>{waiter=null;rej(new Error('sem resposta'))},5000);
+  waiter=()=>{clearTimeout(to);waiter=null;res(rx.replace(/>/g,'').split(/[\r\n]+/).map(s=>s.trim()).filter(Boolean))};
+  send(c+'\r');
+})}
+function ask(c){const r=chain.then(()=>_ask(c));chain=r.catch(()=>{});return r}
+
+async function connBLE(){
+  const dev=await navigator.bluetooth.requestDevice({acceptAllDevices:true,optionalServices:[0xFFE0,0xFFF0,0x18F0,'e7810a71-73ae-499d-8c15-faa9aef0c3f2']});
+  status('Conectando a '+(dev.name||'adaptador')+'…');
+  const srv=await dev.gatt.connect();
+  let r,w;
+  for(const s of await srv.getPrimaryServices())for(const c of await s.getCharacteristics()){
+    if(!r&&(c.properties.notify||c.properties.indicate))r=c;
+    if(!w&&(c.properties.write||c.properties.writeWithoutResponse))w=c;
+  }
+  if(!r||!w)throw new Error('Adaptador BLE sem canal serial compatível');
+  await r.startNotifications();
+  r.addEventListener('characteristicvaluechanged',e=>onData(dec.decode(e.target.value)));
+  send=async s=>{const b=enc.encode(s);for(let i=0;i<b.length;i+=20){const ch=b.slice(i,i+20);
+    if(w.properties.writeWithoutResponse)await w.writeValueWithoutResponse(ch);else await w.writeValueWithResponse(ch)}};
+  disc=async()=>dev.gatt.disconnect();
+  dev.addEventListener('gattserverdisconnected',()=>stop('Adaptador desconectado'));
+}
+async function connSerial(){
+  const port=await navigator.serial.requestPort();
+  await port.open({baudRate:+$('baud').value});
+  const w=port.writable.getWriter(),r=port.readable.getReader();
+  send=s=>w.write(enc.encode(s));
+  (async()=>{try{for(;;){const x=await r.read();if(x.done)break;onData(dec.decode(x.value))}}catch(e){}stop('Porta serial fechada')})();
+  disc=async()=>{try{await r.cancel();w.releaseLock();await port.close()}catch(e){}};
+}
+
+// Bluetooth clássico (somente no APK, via plugin Cordova)
+function connClassic(){return new Promise((res,rej)=>{
+  const bs=window.bluetoothClassicSerial;
+  if(!bs)return rej(new Error('Disponível apenas no app (APK).'));
+  bs.list(devs=>{
+    if(!devs.length)return rej(new Error('Nenhum adaptador pareado. Pareie o ELM327 nas configurações do Android (PIN 1234 ou 0000).'));
+    status('Escolha o adaptador pareado');
+    const box=$('devs');
+    box.innerHTML=devs.map((d,i)=>`<button data-i="${i}">${d.name||d.address}</button>`).join('');
+    box.hidden=false;
+    box.onclick=e=>{
+      const i=e.target.dataset.i;if(i==null)return;
+      box.hidden=true;status('Conectando…');
+      const d=devs[i],U='00001101-0000-1000-8000-00805F9B34FB';
+      bs.connect(d.address,[U],()=>{
+        bs.subscribeRawData(d.address,U,buf=>onData(dec.decode(new Uint8Array(buf))),er=>log('erro rx: '+er));
+        send=s=>new Promise((ok,no)=>bs.write(d.address,U,s,ok,no));
+        disc=()=>new Promise(ok=>bs.disconnect(d.address,U,ok,ok));
+        res();
+      },er=>{if(send)stop('Adaptador desconectado');else rej(new Error('Falha ao conectar: '+er))});
+    };
+  },er=>rej(new Error('Sem permissão de Bluetooth. Ative Dispositivos próximos nas permissões do app. ('+er+')')));
+})}
+
+// leitura
+function bytesOf(lines,pid){
+  for(const l of lines){const s=l.replace(/\s/g,'').toUpperCase(),i=s.indexOf('41'+pid);
+    if(i>=0)return (s.slice(i+4).match(/../g)||[]).map(h=>parseInt(h,16))}
+  return null;
+}
+async function init(){
+  for(const c of ['ATZ','ATE0','ATL0','ATS0','ATH0','ATSP6']){const r=await ask(c);log(c+' → '+r.join(' '))}
+  let r=await ask('0100');log('0100 → '+r.join(' '));
+  if(r.join(' ').match(/UNABLE|ERROR|NO DATA/)){await ask('ATSP0');r=await ask('0100');log('0100 → '+r.join(' '))}
+  if(!bytesOf(r,'00'))throw new Error('ECU não respondeu. Ligue a ignição e tente de novo.');
+  const b=bytesOf(await ask('0133'),'33');if(b)baro=b[0];
+}
+const sim=(p,t)=>{const i=P.indexOf(p);if(p.k==='ect')return 88+2*Math.sin(t/4000);
+  if(p.k==='lam')return 1+0.03*Math.sin(t/700);
+  return p.lo+(p.hi-p.lo)*(0.18+0.12*Math.sin(t/1000*(0.4+i*0.13)+i))};
+async function loop(){
+  const t0=Date.now();
+  while(running){
+    for(const p of P){
+      if(!running)return;
+      if(demo){show(p,sim(p,Date.now()-t0));await new Promise(r=>setTimeout(r,60));continue}
+      if(p.fail>=3)continue;
+      try{
+        const b=bytesOf(await ask(p.c),p.c.slice(2));
+        if(!b){p.fail=(p.fail||0)+1;show(p,null);continue}
+        const v=p.f(b);show(p,v);
+        if(p.k==='map')show(BOOST,(v-baro)/100);
+      }catch(e){log('Erro '+p.c+': '+e.message)}
+    }
+    if(demo){const m=$('v-map').textContent;show(BOOST,(parseFloat(m)-101)/100)}
+  }
+}
+function live(txt,isDemo){
+  demo=isDemo;running=true;
+  $('bOff').disabled=false;$('bDtc').disabled=isDemo;$('bSend').disabled=isDemo;
+  ['bBle','bSer','bCls','bDemo'].forEach(i=>$(i).disabled=true);
+  status(txt,'on');loop();
+}
+function stop(msg){
+  running=false;send=null;demo=false;
+  ['bBle','bSer','bCls','bDemo'].forEach(i=>$(i).disabled=false);
+  ['bOff','bDtc','bSend'].forEach(i=>$(i).disabled=true);
+  P.forEach(p=>p.fail=0);
+  $('devs').hidden=true;
+  status(msg||'Desconectado');
+}
+async function go(fn,label){
+  try{
+    status('Conectando…');
+    await fn();
+    status('Iniciando a ECU…');
+    await init();
+    live(label,false);
+  }catch(e){
+    if(disc)try{await disc()}catch(x){}
+    stop('');status(e.name==='NotFoundError'?'Nenhum dispositivo escolhido':e.message,'err');
+  }
+}
+$('bBle').onclick=()=>{
+  if(!navigator.bluetooth)return status('Este navegador não tem Bluetooth Web. Abra o app no Chrome (Android ou computador).','err');
+  go(connBLE,'Conectado por Bluetooth');
+};
+$('bSer').onclick=()=>{
+  if(!navigator.serial)return status('Este navegador não tem Web Serial. Use o Chrome no computador.','err');
+  go(connSerial,'Conectado por porta serial');
+};
+$('bCls').onclick=()=>go(connClassic,'Conectado por Bluetooth clássico');
+$('bDemo').onclick=()=>live('Modo demonstração: valores simulados',true);
+$('bOff').onclick=async()=>{running=false;if(disc)try{await disc()}catch(e){}stop('Desconectado')};
+
+$('bDtc').onclick=async()=>{
+  const ul=$('dtc');ul.innerHTML='<li>Lendo…</li>';
+  try{
+    const lines=await ask('03');
+    let s=lines.filter(l=>!/^[0-9A-F]{3}$/i.test(l)).map(l=>l.replace(/^\d:/,'').replace(/\s/g,'')).join('').toUpperCase();
+    const i=s.indexOf('43');
+    if(i<0){ul.innerHTML='<li>Nenhuma falha armazenada.</li>';return}
+    const h=(s.slice(i+4).match(/..../g)||[]).filter(x=>x!=='0000');
+    ul.innerHTML=h.length?h.map(x=>{const n=parseInt(x,16);
+      return '<li>'+'PCBU'[n>>14]+((n>>12)&3)+x.slice(1)+'</li>'}).join(''):'<li>Nenhuma falha armazenada.</li>';
+  }catch(e){ul.innerHTML='<li>Erro: '+e.message+'</li>'}
+};
+async function sendCmd(){
+  const c=$('cmd').value.trim();if(!c||!send)return;
+  log('> '+c);
+  try{const r=await ask(c);log(r.join('\n'))}catch(e){log('Erro: '+e.message)}
+  $('cmd').value='';
+}
+$('bSend').onclick=sendCmd;
+$('cmd').onkeydown=e=>{if(e.key==='Enter')sendCmd()};
+</script>
+</body>
+</html>
