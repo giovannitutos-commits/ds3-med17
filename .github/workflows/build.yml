@@ -15,7 +15,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.7
-      - name: Gerar projeto Android nativo (MED17 Dash v7.5)
+      - name: Gerar projeto Android nativo (MED17 Dash v7.6)
         run: |
           mkdir -p app/src/main/java/br/local/ds3 app/src/main/res/values app/src/main/res/drawable app/src/main/res/mipmap-anydpi-v26
           cat > settings.gradle.kts <<'EOF'
@@ -46,8 +46,8 @@ jobs:
                   applicationId = "br.local.ds3"
                   minSdk = 26
                   targetSdk = 34
-                  versionCode = 14
-                  versionName = "7.5"
+                  versionCode = 15
+                  versionName = "7.6"
               }
               compileOptions {
                   sourceCompatibility = JavaVersion.VERSION_17
@@ -1925,10 +1925,9 @@ jobs:
 
               @Composable
               private fun EditDialog(p: P) {
-                  val a = alerts[p.k] ?: Al(false, true, (p.lo + p.hi) / 2)
-                  var on by remember { mutableStateOf(a.on) }
-                  var above by remember { mutableStateOf(a.above) }
-                  var txt by remember { mutableStateOf(fmt(p, a.v)) }
+                  var on by remember { mutableStateOf(alerts[p.k]?.on ?: false) }
+                  var above by remember { mutableStateOf(alerts[p.k]?.above ?: true) }
+                  var txt by remember { mutableStateOf(fmt(p, alerts[p.k]?.v ?: ((p.lo + p.hi) / 2))) }
                   AlertDialog(
                       containerColor = MaterialTheme.colorScheme.surfaceVariant,
                       onDismissRequest = { editing = null },
@@ -1971,7 +1970,7 @@ jobs:
                       },
                       confirmButton = {
                           Button(onClick = {
-                              val v = txt.replace(',', '.').toDoubleOrNull() ?: a.v
+                              val v = txt.replace(',', '.').toDoubleOrNull() ?: 0.0
                               alerts[p.k] = Al(on, above, v); save(); editing = null
                           }) { Text("Salvar") }
                       },
@@ -1981,7 +1980,7 @@ jobs:
 
               @Composable
               private fun EcuAndAboutScreen() {
-                  var confirm by remember { mutableStateOf(false) }
+                  var confirmClear by remember { mutableStateOf(false) }
                   val ok = state == 2 && sock != null
                   val dtcList = dtcs
 
@@ -2025,7 +2024,7 @@ jobs:
                                       Spacer(Modifier.width(6.dp))
                                       Text("Ler DTCs")
                                   }
-                                  OutlinedButton(enabled = ok, onClick = { confirm = true }) {
+                                  OutlinedButton(enabled = ok, onClick = { confirmClear = true }) {
                                       Icon(Icons.Rounded.DeleteSweep, contentDescription = null)
                                       Spacer(Modifier.width(6.dp))
                                       Text("Limpar ECU")
@@ -2070,7 +2069,7 @@ jobs:
                                   Icon(Icons.Rounded.Info, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                                   Text("Sobre o MED17 Dash", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                               }
-                              Text("Versão do App: 7.5 (Build Pro)", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                              Text("Versão do App: 7.6 (Build Pro)", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
                               Text("Desenvolvido por: Giovanni Stocco", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
                               Text(
                                   "Software especializado de telemetria automotiva, leitura em tempo real via protocolo UDS (Modo 22) e OBD2 para centrais de injeção Bosch MED17.4.2 (motores THP / PSA).",
@@ -2080,19 +2079,19 @@ jobs:
                       }
                   }
 
-                  if (confirm) {
+                  if (confirmClear) {
                       AlertDialog(
                           containerColor = MaterialTheme.colorScheme.surfaceVariant,
-                          onDismissRequest = { confirm = false },
+                          onDismissRequest = { confirmClear = false },
                           title = { Text("Limpar Avarias (Modo 04)?") },
                           text = { Text("Isso apagará a luz de injeção (MIL) e os parâmetros de Freeze Frame da MED17.4.2.") },
                           confirmButton = {
                               Button(
                                   colors = ButtonDefaults.buttonColors(containerColor = ErrCol),
-                                  onClick = { confirm = false; clearDtc() }
+                                  onClick = { confirmClear = false; clearDtc() }
                               ) { Text("Apagar Tudo") }
                           },
-                          dismissButton = { TextButton(onClick = { confirm = false }) { Text("Cancelar") } }
+                          dismissButton = { TextButton(onClick = { confirmClear = false }) { Text("Cancelar") } }
                       )
                   }
               }
