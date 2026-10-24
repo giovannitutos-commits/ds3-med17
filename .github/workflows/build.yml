@@ -15,7 +15,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.7
-      - name: Gerar projeto Android nativo (Kotlin)
+      - name: Gerar projeto Android nativo (Kotlin + Material 3)
         run: |
           mkdir -p app/src/main/java/br/local/ds3
           cat > settings.gradle.kts <<'EOF'
@@ -31,8 +31,8 @@ jobs:
           }
           EOF
           cat > gradle.properties <<'EOF'
-          org.gradle.jvmargs=-Xmx2g
-          android.useAndroidX=false
+          org.gradle.jvmargs=-Xmx3g
+          android.useAndroidX=true
           EOF
           cat > app/build.gradle.kts <<'EOF'
           plugins {
@@ -46,14 +46,22 @@ jobs:
                   applicationId = "br.local.ds3"
                   minSdk = 24
                   targetSdk = 34
-                  versionCode = 1
-                  versionName = "1.0"
+                  versionCode = 2
+                  versionName = "2.0"
               }
               compileOptions {
                   sourceCompatibility = JavaVersion.VERSION_17
                   targetCompatibility = JavaVersion.VERSION_17
               }
               kotlinOptions { jvmTarget = "17" }
+              buildFeatures { compose = true }
+              composeOptions { kotlinCompilerExtensionVersion = "1.5.14" }
+          }
+          dependencies {
+              implementation(platform("androidx.compose:compose-bom:2024.06.00"))
+              implementation("androidx.compose.ui:ui")
+              implementation("androidx.compose.material3:material3")
+              implementation("androidx.activity:activity-compose:1.9.0")
           }
           EOF
           cat > app/src/main/AndroidManifest.xml <<'EOF'
@@ -62,8 +70,10 @@ jobs:
               <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
               <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
               <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+              <uses-permission android:name="android.permission.VIBRATE" />
               <application android:label="DS3 MED17" android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
-                  <activity android:name=".MainActivity" android:exported="true">
+                  <activity android:name=".MainActivity" android:exported="true"
+                      android:configChanges="orientation|screenSize|keyboardHidden|uiMode|screenLayout">
                       <intent-filter>
                           <action android:name="android.intent.action.MAIN" />
                           <category android:name="android.intent.category.LAUNCHER" />
@@ -76,28 +86,53 @@ jobs:
           package br.local.ds3
 
           import android.Manifest
-          import android.app.Activity
-          import android.app.AlertDialog
-          import android.bluetooth.BluetoothAdapter
           import android.bluetooth.BluetoothDevice
           import android.bluetooth.BluetoothManager
           import android.bluetooth.BluetoothSocket
+          import android.content.Intent
+          import android.content.SharedPreferences
           import android.content.pm.PackageManager
-          import android.graphics.Color
-          import android.graphics.Typeface
-          import android.graphics.drawable.GradientDrawable
+          import android.media.AudioAttributes
+          import android.media.AudioManager
+          import android.media.RingtoneManager
+          import android.media.ToneGenerator
+          import android.net.Uri
           import android.os.Build
           import android.os.Bundle
-          import android.util.TypedValue
-          import android.widget.*
+          import android.os.SystemClock
+          import android.os.Vibrator
+          import android.view.WindowManager
+          import androidx.activity.ComponentActivity
+          import androidx.activity.compose.setContent
+          import androidx.activity.enableEdgeToEdge
+          import androidx.activity.result.contract.ActivityResultContracts
+          import androidx.compose.foundation.clickable
+          import androidx.compose.foundation.layout.*
+          import androidx.compose.foundation.lazy.LazyColumn
+          import androidx.compose.foundation.lazy.grid.*
+          import androidx.compose.foundation.lazy.items
+          import androidx.compose.foundation.rememberScrollState
+          import androidx.compose.foundation.selection.selectable
+          import androidx.compose.foundation.text.KeyboardOptions
+          import androidx.compose.foundation.verticalScroll
+          import androidx.compose.material3.*
+          import androidx.compose.runtime.*
+          import androidx.compose.ui.Alignment
+          import androidx.compose.ui.Modifier
+          import androidx.compose.ui.platform.LocalContext
+          import androidx.compose.ui.semantics.Role
+          import androidx.compose.ui.text.input.KeyboardType
+          import androidx.compose.ui.unit.dp
           import java.io.InputStream
           import java.io.OutputStream
           import java.util.UUID
           import kotlin.math.sin
 
           class P(val k: String, val n: String, val u: String, val c: String, val d: Int, val lo: Double, val hi: Double, val f: (IntArray) -> Double)
+          data class Al(val on: Boolean, val above: Boolean, val v: Double)
 
-          class MainActivity : Activity() {
+          @OptIn(ExperimentalMaterial3Api::class)
+          class MainActivity : ComponentActivity() {
               private val spp = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
               private val boostP = P("boost", "Pressão do turbo (relativa)", "bar", "", 2, -1.0, 2.0) { 0.0 }
               private val pids = listOf(
@@ -115,82 +150,96 @@ jobs:
                   P("lam", "Lambda", "λ", "0124", 2, 0.6, 1.4) { (it[0] * 256 + it[1]) * 2 / 65536.0 },
                   P("vb", "Tensão da ECU", "V", "0142", 1, 8.0, 16.0) { (it[0] * 256 + it[1]) / 1000.0 }
               )
+              private val allP = listOf(boostP) + pids
+              private val soundNames = listOf("Bipe", "Bipe duplo", "Alerta", "Alarme longo", "Som do sistema")
+
               private val lock = Any()
-              private val vals = HashMap<String, TextView>()
-              private val mms = HashMap<String, TextView>()
-              private val mm = HashMap<String, DoubleArray>()
-              private val fails = HashMap<String, Int>()
+              private val live = mutableStateMapOf<String, Double>()
+              private val mn = mutableStateMapOf<String, Double>()
+              private val mx = mutableStateMapOf<String, Double>()
+              private val tripped = mutableStateMapOf<String, Boolean>()
+              private val alerts = mutableStateMapOf<String, Al>()
+              private var status by mutableStateOf("Desconectado")
+              private var state by mutableStateOf(0)
+              private var editing by mutableStateOf<P?>(null)
+              private var devs by mutableStateOf<List<BluetoothDevice>?>(null)
+              private var dtcs by mutableStateOf<List<String>?>(null)
+              private var master by mutableStateOf(true)
+              private var snd by mutableStateOf(1)
+              private var uri by mutableStateOf<String?>(null)
+              private var cool by mutableStateOf(8)
+              private var vibe by mutableStateOf(true)
+
+              private lateinit var sp: SharedPreferences
+              private var lastAddr: String? = null
+              private var lastBeep = 0L
               private var sock: BluetoothSocket? = null
               private var inp: InputStream? = null
               private var out: OutputStream? = null
               @Volatile private var running = false
               private var baro = 101.0
               private var pending: (() -> Unit)? = null
-              private var state = 0
-              private lateinit var status: TextView
-              private lateinit var bConn: Button
-              private lateinit var bDemo: Button
-              private lateinit var bDtc: Button
+              private val fails = HashMap<String, Int>()
+              private val tg by lazy { ToneGenerator(AudioManager.STREAM_ALARM, 100) }
 
-              private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
-              private fun txt(s: String, sp: Float, col: String, bold: Boolean = false) = TextView(this).apply {
-                  text = s
-                  setTextSize(TypedValue.COMPLEX_UNIT_SP, sp)
-                  setTextColor(Color.parseColor(col))
-                  if (bold) typeface = Typeface.DEFAULT_BOLD
-              }
-
-              override fun onCreate(b: Bundle?) {
-                  super.onCreate(b)
-                  val root = LinearLayout(this).apply {
-                      orientation = LinearLayout.VERTICAL
-                      setPadding(dp(12), dp(36), dp(12), dp(20))
-                      setBackgroundColor(Color.parseColor("#0F1318"))
+              private val pickSound = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
+                  if (r.resultCode == RESULT_OK) {
+                      @Suppress("DEPRECATION")
+                      val u = r.data?.getParcelableExtra<Uri>(RingtoneManager.EXTRA_RINGTONE_PICKED_URI)
+                      if (u != null) { uri = u.toString(); snd = 4; save() }
                   }
-                  root.addView(txt("Citroën DS3 – MED17.4.2", 24f, "#E6EBEE", true))
-                  status = txt("Desconectado", 14f, "#8D9AA5").apply { setPadding(0, dp(4), 0, dp(10)) }
-                  root.addView(status)
-                  val row = LinearLayout(this)
-                  bConn = Button(this).apply { text = "Conectar"; setOnClickListener { if (state == 2) stop("Desconectado") else needPerm { pick() } } }
-                  bDemo = Button(this).apply { text = "Demo"; setOnClickListener { demo() } }
-                  bDtc = Button(this).apply { text = "Falhas"; isEnabled = false; setOnClickListener { dtc() } }
-                  for (x in listOf(bConn, bDemo, bDtc)) row.addView(x, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-                  root.addView(row)
-                  val grid = GridLayout(this).apply { columnCount = 2 }
-                  for (p in listOf(boostP) + pids) grid.addView(tile(p), lp(p === boostP))
-                  root.addView(grid)
-                  setContentView(ScrollView(this).apply { setBackgroundColor(Color.parseColor("#0F1318")); addView(root) })
               }
 
-              private fun tile(p: P): LinearLayout {
-                  val c = LinearLayout(this).apply {
-                      orientation = LinearLayout.VERTICAL
-                      setPadding(dp(12), dp(10), dp(12), dp(10))
-                      background = GradientDrawable().apply { setColor(Color.parseColor("#171D24")); cornerRadius = dp(10).toFloat() }
+              // ---------- persistência ----------
+              private fun load() {
+                  sp = getSharedPreferences("ds3", 0)
+                  master = sp.getBoolean("master", true); snd = sp.getInt("snd", 1); uri = sp.getString("uri", null)
+                  cool = sp.getInt("cool", 8); vibe = sp.getBoolean("vibe", true); lastAddr = sp.getString("addr", null)
+                  for (p in allP) sp.getString("al_" + p.k, null)?.split(",")?.let {
+                      if (it.size == 3) alerts[p.k] = Al(it[0] == "1", it[1] == "1", it[2].toDoubleOrNull() ?: 0.0)
                   }
-                  val big = p === boostP
-                  c.addView(txt(p.n + " (" + p.u + ")", 13f, "#8D9AA5"))
-                  val v = txt("–", if (big) 44f else 30f, if (big) "#4CC3E0" else "#E6EBEE")
-                  val m = txt("mín – máx –", 11f, "#8D9AA5")
-                  vals[p.k] = v
-                  mms[p.k] = m
-                  c.addView(v)
-                  c.addView(m)
-                  return c
+                  if (alerts["ect"] == null) alerts["ect"] = Al(true, true, 105.0)
               }
 
-              private fun lp(big: Boolean) = GridLayout.LayoutParams(
-                  GridLayout.spec(GridLayout.UNDEFINED),
-                  GridLayout.spec(GridLayout.UNDEFINED, if (big) 2 else 1, 1f)
-              ).apply { width = 0; setMargins(dp(4), dp(4), dp(4), dp(4)) }
+              private fun save() {
+                  val e = sp.edit()
+                  e.putBoolean("master", master).putInt("snd", snd).putString("uri", uri).putInt("cool", cool).putBoolean("vibe", vibe)
+                  alerts.forEach { (k, a) -> e.putString("al_$k", "${if (a.on) 1 else 0},${if (a.above) 1 else 0},${a.v}") }
+                  e.apply()
+              }
 
-              private fun setState(s: Int, msg: String) = runOnUiThread {
-                  state = s
-                  status.text = msg
-                  bConn.text = if (s == 2) "Desconectar" else "Conectar"
-                  bConn.isEnabled = s != 1
-                  bDemo.isEnabled = s == 0
-                  bDtc.isEnabled = s == 2 && sock != null
+              // ---------- som ----------
+              @Suppress("DEPRECATION")
+              private fun beep() {
+                  if (snd == 4 && uri != null) {
+                      runCatching {
+                          val r = RingtoneManager.getRingtone(this, Uri.parse(uri))
+                          if (Build.VERSION.SDK_INT >= 28) r.audioAttributes = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ALARM).build()
+                          r.play()
+                      }
+                  } else {
+                      val t = when (snd) {
+                          0 -> ToneGenerator.TONE_PROP_BEEP
+                          1 -> ToneGenerator.TONE_PROP_BEEP2
+                          2 -> ToneGenerator.TONE_CDMA_ALERT_CALL_GUARD
+                          else -> ToneGenerator.TONE_CDMA_EMERGENCY_RINGBACK
+                      }
+                      tg.startTone(t, if (snd == 3) 2000 else 700)
+                  }
+                  if (vibe) runCatching { (getSystemService(VIBRATOR_SERVICE) as Vibrator).vibrate(500) }
+              }
+
+              private fun soundTitle(): String = try {
+                  RingtoneManager.getRingtone(this, Uri.parse(uri)).getTitle(this)
+              } catch (e: Exception) { "Nenhum som escolhido" }
+
+              // ---------- conexão ----------
+              private fun setState(s: Int, msg: String) {
+                  state = s; status = msg
+                  runOnUiThread {
+                      if (s == 2) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                      else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                  }
               }
 
               private fun needPerm(then: () -> Unit) {
@@ -201,26 +250,34 @@ jobs:
               }
 
               override fun onRequestPermissionsResult(rc: Int, p: Array<out String>, r: IntArray) {
+                  super.onRequestPermissionsResult(rc, p, r)
                   if (r.isNotEmpty() && r[0] == PackageManager.PERMISSION_GRANTED) pending?.invoke()
-                  else setState(0, "Permissão de Bluetooth negada. Ative Dispositivos próximos nas permissões do app.")
+                  else setState(0, "Permissão negada. Ative Dispositivos próximos nas permissões do app.")
                   pending = null
               }
 
+              private fun adapter() = (getSystemService(BLUETOOTH_SERVICE) as BluetoothManager).adapter
+
               private fun pick() {
-                  val ad = (getSystemService(BLUETOOTH_SERVICE) as BluetoothManager).adapter
+                  val ad = adapter()
                   if (ad == null || !ad.isEnabled) { setState(0, "Ligue o Bluetooth do celular."); return }
-                  val devs = ad.bondedDevices.toList()
-                  if (devs.isEmpty()) { setState(0, "Nenhum adaptador pareado. Pareie o ELM327 nas configurações (PIN 1234 ou 0000)."); return }
-                  AlertDialog.Builder(this).setTitle("Escolha o adaptador")
-                      .setItems(devs.map { it.name ?: it.address }.toTypedArray()) { _, i -> connect(devs[i], ad) }
-                      .show()
+                  val l = ad.bondedDevices.toList()
+                  if (l.isEmpty()) { setState(0, "Nenhum adaptador pareado. Pareie o ELM327 nas configurações do Android (PIN 1234 ou 0000)."); return }
+                  devs = l
               }
 
-              private fun connect(d: BluetoothDevice, ad: BluetoothAdapter) {
+              private fun connectLast() {
+                  val ad = adapter()
+                  if (ad == null || !ad.isEnabled) { setState(0, "Ligue o Bluetooth do celular."); return }
+                  val d = ad.bondedDevices.firstOrNull { it.address == lastAddr }
+                  if (d != null) connect(d) else pick()
+              }
+
+              private fun connect(d: BluetoothDevice) {
                   setState(1, "Conectando…")
                   Thread {
                       try {
-                          ad.cancelDiscovery()
+                          adapter().cancelDiscovery()
                           var s = d.createRfcommSocketToServiceRecord(spp)
                           try { s.connect() } catch (x: Exception) {
                               try { s.close() } catch (y: Exception) {}
@@ -233,7 +290,8 @@ jobs:
                           if (!r.replace(" ", "").contains("4100")) { ask("ATSP0"); r = ask("0100", 15000) }
                           if (!r.replace(" ", "").contains("4100")) throw Exception("ECU não respondeu. Ligue a ignição.")
                           bytes(ask("0133"), "33")?.let { baro = it[0].toDouble() }
-                          fails.clear(); mm.clear()
+                          fails.clear(); live.clear(); mn.clear(); mx.clear(); tripped.clear()
+                          lastAddr = d.address; sp.edit().putString("addr", d.address).apply()
                           running = true
                           setState(2, "Conectado a " + (d.name ?: d.address))
                           loop()
@@ -289,17 +347,21 @@ jobs:
               }
 
               private fun show(p: P, v: Double) {
-                  val m = mm.getOrPut(p.k) { doubleArrayOf(v, v) }
-                  m[0] = minOf(m[0], v); m[1] = maxOf(m[1], v)
-                  runOnUiThread {
-                      vals[p.k]?.text = "%.${p.d}f".format(v)
-                      mms[p.k]?.text = "mín %.${p.d}f   máx %.${p.d}f".format(m[0], m[1])
+                  live[p.k] = v
+                  mn[p.k] = minOf(mn[p.k] ?: v, v)
+                  mx[p.k] = maxOf(mx[p.k] ?: v, v)
+                  val a = alerts[p.k]
+                  val hit = master && a != null && a.on && (if (a.above) v > a.v else v < a.v)
+                  if (tripped[p.k] != hit) tripped[p.k] = hit
+                  if (hit) {
+                      val now = SystemClock.elapsedRealtime()
+                      if (now - lastBeep > cool * 1000L) { lastBeep = now; runOnUiThread { beep() } }
                   }
               }
 
               private fun demo() {
                   running = true
-                  mm.clear()
+                  live.clear(); mn.clear(); mx.clear(); tripped.clear()
                   setState(2, "Modo demonstração (valores simulados)")
                   Thread {
                       val t0 = System.currentTimeMillis()
@@ -319,27 +381,257 @@ jobs:
                   }.start()
               }
 
-              private fun dtc() {
+              private fun readDtc() {
                   Thread {
                       val r = try { synchronized(lock) { ask("03") } } catch (e: Exception) { "" }
                       val s = r.split('\r', '\n').map { it.trim() }
                           .filter { it.isNotEmpty() && !Regex("[0-9A-Fa-f]{3}").matches(it) }
                           .joinToString("") { it.replace(Regex("^\\d:"), "").replace(" ", "") }.uppercase()
                       val i = s.indexOf("43")
-                      val codes = if (i < 0) emptyList() else s.substring(i + 4).chunked(4).filter { it.length == 4 && it != "0000" }.map {
+                      dtcs = if (i < 0) emptyList() else s.substring(i + 4).chunked(4).filter { it.length == 4 && it != "0000" }.map {
                           val n = it.toInt(16)
                           "PCBU"[n shr 14].toString() + ((n shr 12) and 3) + it.substring(1)
                       }
-                      runOnUiThread {
-                          AlertDialog.Builder(this).setTitle("Códigos de falha")
-                              .setMessage(if (codes.isEmpty()) "Nenhuma falha armazenada." else codes.joinToString("\n"))
-                              .setPositiveButton("OK", null).show()
-                      }
+                  }.start()
+              }
+
+              private fun clearDtc() {
+                  Thread {
+                      try { synchronized(lock) { ask("04") } } catch (e: Exception) {}
+                      readDtc()
                   }.start()
               }
 
               private fun close() { try { sock?.close() } catch (x: Exception) {}; sock = null }
               private fun stop(msg: String) { running = false; close(); setState(0, msg) }
+              private fun fmt(p: P, v: Double) = "%.${p.d}f".format(v)
+
+              // ---------- interface ----------
+              override fun onCreate(b: Bundle?) {
+                  super.onCreate(b)
+                  enableEdgeToEdge()
+                  load()
+                  setContent { AppTheme { App() } }
+              }
+
+              @Composable
+              private fun AppTheme(content: @Composable () -> Unit) {
+                  val dark = isSystemInDarkTheme()
+                  val ctx = LocalContext.current
+                  val cs = when {
+                      Build.VERSION.SDK_INT >= 31 && dark -> dynamicDarkColorScheme(ctx)
+                      Build.VERSION.SDK_INT >= 31 -> dynamicLightColorScheme(ctx)
+                      dark -> darkColorScheme()
+                      else -> lightColorScheme()
+                  }
+                  MaterialTheme(colorScheme = cs, content = content)
+              }
+
+              @Composable
+              private fun App() {
+                  var tab by remember { mutableStateOf(0) }
+                  Scaffold(
+                      topBar = { CenterAlignedTopAppBar(title = { Text("DS3 – MED17.4.2") }) },
+                      bottomBar = {
+                          NavigationBar {
+                              listOf("Painel" to "📊", "Alertas" to "🔔", "Falhas" to "🛠").forEachIndexed { i, (n, e) ->
+                                  NavigationBarItem(selected = tab == i, onClick = { tab = i }, icon = { Text(e) }, label = { Text(n) })
+                              }
+                          }
+                      }
+                  ) { pad ->
+                      Box(Modifier.padding(pad)) {
+                          when (tab) { 0 -> Panel(); 1 -> Alerts(); else -> Dtcs() }
+                      }
+                  }
+                  editing?.let { EditDialog(it) }
+                  devs?.let { l ->
+                      AlertDialog(
+                          onDismissRequest = { devs = null },
+                          title = { Text("Escolha o adaptador") },
+                          text = { Column { l.forEach { d -> TextButton(onClick = { devs = null; connect(d) }) { Text(d.name ?: d.address) } } } },
+                          confirmButton = {},
+                          dismissButton = { TextButton(onClick = { devs = null }) { Text("Cancelar") } }
+                      )
+                  }
+              }
+
+              @Composable
+              private fun Panel() {
+                  LazyVerticalGrid(
+                      columns = GridCells.Fixed(2), modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(12.dp),
+                      horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)
+                  ) {
+                      item(span = { GridItemSpan(maxLineSpan) }) { ConnCard() }
+                      item(span = { GridItemSpan(maxLineSpan) }) { ParamCard(boostP, true) }
+                      items(pids) { ParamCard(it, false) }
+                  }
+              }
+
+              @Composable
+              private fun ConnCard() {
+                  Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
+                      Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                          Text(status, style = MaterialTheme.typography.titleMedium)
+                          Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                              if (state == 2) Button(onClick = { stop("Desconectado") }) { Text("Desconectar") }
+                              else Button(enabled = state == 0, onClick = { needPerm { connectLast() } }) { Text("Conectar") }
+                              OutlinedButton(enabled = state == 0, onClick = { demo() }) { Text("Demo") }
+                              if (state == 0) TextButton(onClick = { needPerm { pick() } }) { Text("Adaptador") }
+                          }
+                      }
+                  }
+              }
+
+              @Composable
+              private fun ParamCard(p: P, big: Boolean) {
+                  val v = live[p.k]
+                  val hit = tripped[p.k] == true
+                  val colors = if (hit) CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer) else CardDefaults.cardColors()
+                  Card(onClick = { editing = p }, colors = colors) {
+                      Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                          Row(verticalAlignment = Alignment.CenterVertically) {
+                              Text(p.n, style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f))
+                              if (alerts[p.k]?.on == true) Text("🔔")
+                          }
+                          Row(verticalAlignment = Alignment.Bottom) {
+                              Text(if (v == null) "–" else fmt(p, v), style = if (big) MaterialTheme.typography.displayMedium else MaterialTheme.typography.headlineMedium)
+                              Spacer(Modifier.width(6.dp))
+                              Text(p.u, style = MaterialTheme.typography.bodyMedium)
+                          }
+                          LinearProgressIndicator(
+                              progress = { (((v ?: p.lo) - p.lo) / (p.hi - p.lo)).toFloat().coerceIn(0f, 1f) },
+                              modifier = Modifier.fillMaxWidth(),
+                              color = if (hit) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+                          )
+                          val a = mn[p.k]; val z = mx[p.k]
+                          Text(if (a == null || z == null) "mín –   máx –" else "mín ${fmt(p, a)}   máx ${fmt(p, z)}", style = MaterialTheme.typography.bodySmall)
+                      }
+                  }
+              }
+
+              @Composable
+              private fun Alerts() {
+                  LazyColumn(contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxSize()) {
+                      item {
+                          Card {
+                              Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                  Row(verticalAlignment = Alignment.CenterVertically) {
+                                      Text("Alertas sonoros", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                                      Switch(checked = master, onCheckedChange = { master = it; save() })
+                                  }
+                                  Text("Som do alerta", style = MaterialTheme.typography.labelLarge)
+                                  soundNames.forEachIndexed { i, n ->
+                                      Row(
+                                          Modifier.fillMaxWidth().selectable(selected = snd == i, role = Role.RadioButton, onClick = { snd = i; save() }).padding(vertical = 6.dp),
+                                          verticalAlignment = Alignment.CenterVertically
+                                      ) {
+                                          RadioButton(selected = snd == i, onClick = null)
+                                          Spacer(Modifier.width(12.dp))
+                                          Text(n)
+                                      }
+                                  }
+                                  if (snd == 4) {
+                                      Text(if (uri == null) "Nenhum som escolhido" else soundTitle(), style = MaterialTheme.typography.bodyMedium)
+                                      OutlinedButton(onClick = {
+                                          val it = Intent(RingtoneManager.ACTION_RINGTONE_PICKER)
+                                              .putExtra(RingtoneManager.EXTRA_RINGTONE_TYPE, RingtoneManager.TYPE_ALL)
+                                          pickSound.launch(it)
+                                      }) { Text("Escolher som…") }
+                                  }
+                                  Row(verticalAlignment = Alignment.CenterVertically) {
+                                      Text("Vibrar junto", modifier = Modifier.weight(1f))
+                                      Switch(checked = vibe, onCheckedChange = { vibe = it; save() })
+                                  }
+                                  Text("Repetir a cada $cool s", style = MaterialTheme.typography.labelLarge)
+                                  Slider(value = cool.toFloat(), onValueChange = { cool = it.toInt() }, valueRange = 2f..30f, steps = 27, onValueChangeFinished = { save() })
+                                  Button(onClick = { beep() }) { Text("Testar som") }
+                              }
+                          }
+                      }
+                      item { Text("Limites por parâmetro (toque para editar)", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 8.dp)) }
+                      items(allP) { p ->
+                          val a = alerts[p.k]
+                          ListItem(
+                              modifier = Modifier.clickable { editing = p },
+                              headlineContent = { Text(p.n) },
+                              supportingContent = {
+                                  Text(if (a == null || !a.on) "Desligado" else (if (a.above) "Avisar acima de " else "Avisar abaixo de ") + fmt(p, a.v) + " " + p.u)
+                              },
+                              trailingContent = {
+                                  Switch(checked = a?.on == true, onCheckedChange = {
+                                      alerts[p.k] = (a ?: Al(false, true, (p.lo + p.hi) / 2)).copy(on = it); save()
+                                  })
+                              }
+                          )
+                      }
+                  }
+              }
+
+              @Composable
+              private fun EditDialog(p: P) {
+                  val a = alerts[p.k] ?: Al(false, true, (p.lo + p.hi) / 2)
+                  var on by remember { mutableStateOf(a.on) }
+                  var above by remember { mutableStateOf(a.above) }
+                  var txt by remember { mutableStateOf(fmt(p, a.v)) }
+                  AlertDialog(
+                      onDismissRequest = { editing = null },
+                      title = { Text("Alerta: " + p.n) },
+                      text = {
+                          Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                              Row(verticalAlignment = Alignment.CenterVertically) {
+                                  Text("Ativar", modifier = Modifier.weight(1f))
+                                  Switch(checked = on, onCheckedChange = { on = it })
+                              }
+                              Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                  FilterChip(selected = above, onClick = { above = true }, label = { Text("Acima de") })
+                                  FilterChip(selected = !above, onClick = { above = false }, label = { Text("Abaixo de") })
+                              }
+                              OutlinedTextField(
+                                  value = txt, onValueChange = { txt = it }, singleLine = true, label = { Text("Valor (" + p.u + ")") },
+                                  keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
+                              )
+                          }
+                      },
+                      confirmButton = {
+                          TextButton(onClick = {
+                              val v = txt.replace(',', '.').toDoubleOrNull() ?: a.v
+                              alerts[p.k] = Al(on, above, v); save(); editing = null
+                          }) { Text("Salvar") }
+                      },
+                      dismissButton = { TextButton(onClick = { editing = null }) { Text("Cancelar") } }
+                  )
+              }
+
+              @Composable
+              private fun Dtcs() {
+                  var confirm by remember { mutableStateOf(false) }
+                  val ok = state == 2 && sock != null
+                  Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                      Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                          Button(enabled = ok, onClick = { readDtc() }) { Text("Ler falhas") }
+                          OutlinedButton(enabled = ok, onClick = { confirm = true }) { Text("Apagar falhas") }
+                      }
+                      val l = dtcs
+                      when {
+                          l == null -> Text(if (ok) "Toque em Ler falhas." else "Conecte ao carro para ler os códigos de falha.")
+                          l.isEmpty() -> Card { Text("Nenhuma falha armazenada.", Modifier.padding(16.dp)) }
+                          else -> l.forEach { Card(Modifier.fillMaxWidth()) { Text(it, Modifier.padding(16.dp), style = MaterialTheme.typography.titleMedium) } }
+                      }
+                  }
+                  if (confirm) AlertDialog(
+                      onDismissRequest = { confirm = false },
+                      title = { Text("Apagar códigos de falha?") },
+                      text = { Text("Os códigos e os dados de congelamento serão apagados da ECU. Se o problema continuar, as falhas voltam.") },
+                      confirmButton = { TextButton(onClick = { confirm = false; clearDtc() }) { Text("Apagar") } },
+                      dismissButton = { TextButton(onClick = { confirm = false }) { Text("Cancelar") } }
+                  )
+              }
+
+              override fun onDestroy() {
+                  running = false; close()
+                  super.onDestroy()
+              }
           }
           EOF
       - name: Compilar APK
