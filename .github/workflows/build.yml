@@ -15,7 +15,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.7
-      - name: Gerar projeto Android nativo (MED17 Dash v8.3)
+      - name: Gerar projeto Android nativo (MED17 Dash v8.4)
         run: |
           mkdir -p app/src/main/java/br/local/ds3 app/src/main/res/values app/src/main/res/drawable app/src/main/res/mipmap-anydpi-v26
           cat > settings.gradle.kts <<'EOF'
@@ -46,8 +46,8 @@ jobs:
                   applicationId = "br.local.ds3"
                   minSdk = 26
                   targetSdk = 34
-                  versionCode = 22
-                  versionName = "8.3"
+                  versionCode = 23
+                  versionName = "8.4"
               }
               compileOptions {
                   sourceCompatibility = JavaVersion.VERSION_17
@@ -1337,7 +1337,7 @@ jobs:
                                       items(termLogs) { item ->
                                           Column(
                                               Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
-                                                  .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)).padding(10.dp),
+                                                  .background(MaterialTheme.colorScheme.surfaceVariant.copy(0.6f)).padding(10.dp),
                                               verticalArrangement = Arrangement.spacedBy(3.dp)
                                           ) {
                                               Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1657,17 +1657,17 @@ jobs:
                       onClick = { editing = p },
                       colors = cc(if (hit) Color(0xFF381117) else if (dimmed) MaterialTheme.colorScheme.background else MaterialTheme.colorScheme.surface),
                       shape = RoundedCornerShape(18.dp),
-                      border = BorderStroke(1.dp, if (hit) ErrCol else if (p.custom) MaterialTheme.colorScheme.primary.copy(alpha = 0.45f) else MaterialTheme.colorScheme.outline)
+                      border = BorderStroke(1.dp, if (hit) ErrCol else if (p.custom) MaterialTheme.colorScheme.primary.copy(0.45f) else MaterialTheme.colorScheme.outline)
                   ) {
                       Column(Modifier.padding(13.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                           Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                               Text(
                                   p.n, style = MaterialTheme.typography.labelMedium,
-                                  color = if (dimmed) MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f) else MaterialTheme.colorScheme.onSurfaceVariant,
+                                  color = if (dimmed) MaterialTheme.colorScheme.onSurfaceVariant.copy(0.5f) else MaterialTheme.colorScheme.onSurfaceVariant,
                                   modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis
                               )
                               if (p.custom) {
-                                  Surface(color = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f), shape = RoundedCornerShape(4.dp)) {
+                                  Surface(color = MaterialTheme.colorScheme.primary.copy(0.15f), shape = RoundedCornerShape(4.dp)) {
                                       Text("UDS", Modifier.padding(horizontal = 4.dp, vertical = 1.dp), style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp), color = MaterialTheme.colorScheme.primary)
                                   }
                               }
@@ -1688,7 +1688,7 @@ jobs:
                           }
                           LinearProgressIndicator(
                               progress = { (((v ?: p.lo) - p.lo) / (p.hi - p.lo)).toFloat().coerceIn(0f, 1f) },
-                              modifier = Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp)),
+                              modifier = Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(3.dp)),
                               color = if (hit) ErrCol else MaterialTheme.colorScheme.primary, trackColor = MaterialTheme.colorScheme.surfaceVariant
                           )
                           val a = mn[p.k]; val z = mx[p.k]
@@ -2041,7 +2041,7 @@ jobs:
                                   Icon(Icons.Rounded.Info, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                                   Text("Sobre o MED17 Dash", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                               }
-                              Text("Versão do App: 8.3 (Build Pro)", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                              Text("Versão do App: 8.4 (Build Pro)", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
                               Text("Desenvolvido por: Giovanni Stocco", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
                               Text(
                                   "Software especializado de telemetria automotiva, leitura em tempo real via protocolo UDS (Modo 22) e OBD2 para centrais de injeção Bosch MED17.4.2 (motores THP / PSA).",
@@ -2077,7 +2077,7 @@ jobs:
                           color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(8.dp)
                       )
                   } else if (dtcList.isEmpty()) {
-                      Card(colors = cc(MaterialTheme.colorScheme.surfaceVariant), shape = RoundedCornerShape(18.dp), border = BorderStroke(1.dp, OkCol.copy(alpha = 0.5f)), modifier = Modifier.fillMaxWidth()) {
+                      Card(colors = cc(MaterialTheme.colorScheme.surfaceVariant), shape = RoundedCornerShape(18.dp), border = BorderStroke(1.dp, OkCol.copy(0.5f)), modifier = Modifier.fillMaxWidth()) {
                           Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                               Icon(Icons.Rounded.CheckCircle, contentDescription = null, tint = OkCol)
                               Spacer(Modifier.width(10.dp))
