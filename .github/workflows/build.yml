@@ -16,7 +16,7 @@ jobs:
         with:
           gradle-version: 8.7
 
-      - name: Cachear Keystore Fixa (Evita conflito de atualização no Android)
+      - name: Cachear Keystore Fixa (Atualização direta sem conflito)
         uses: actions/cache@v4
         with:
           path: ~/.android/debug.keystore
@@ -32,7 +32,7 @@ jobs:
               -dname "CN=Android Debug,O=Android,C=US"
           fi
 
-      - name: Gerar projeto Android nativo (MED17 Dash v9.0)
+      - name: Gerar projeto Android nativo (MED17 Dash v10.0)
         run: |
           mkdir -p app/src/main/java/br/local/ds3 app/src/main/res/values app/src/main/res/drawable app/src/main/res/mipmap-anydpi-v26
           cat > settings.gradle.kts <<'EOF'
@@ -63,8 +63,8 @@ jobs:
                   applicationId = "br.local.ds3"
                   minSdk = 26
                   targetSdk = 34
-                  versionCode = 30
-                  versionName = "9.0"
+                  versionCode = 35
+                  versionName = "10.0"
               }
               compileOptions {
                   sourceCompatibility = JavaVersion.VERSION_17
@@ -273,8 +273,14 @@ jobs:
               private val cockpitGauge = mutableStateMapOf<String, Boolean>()
               private fun gaugeStyle(k: String) = cockpitGauge[k] ?: (k == "rpm" || k == "boost")
 
-              private var darkThemeOpt by mutableStateOf(0) // 0 = Seguir Sistema, 1 = Escuro, 2 = Claro
+              private var darkThemeOpt by mutableStateOf(0)
               private var accentColorIdx by mutableStateOf(0)
+
+              // Configurações do Shift Light Gigante
+              private var slStart by mutableStateOf(5200)
+              private var slMid by mutableStateOf(5800)
+              private var slMax by mutableStateOf(6400)
+              private var slFlash by mutableStateOf(true)
 
               private val soundNames = listOf("Bipe Curto", "Bipe Duplo", "Alerta Tático", "Alarme Contínuo", "Som Personalizado")
 
@@ -426,6 +432,11 @@ jobs:
                   darkThemeOpt = sp.getInt("dark_theme_opt", 0)
                   accentColorIdx = sp.getInt("accent_color_idx", 0).coerceIn(0, palettes.lastIndex)
 
+                  slStart = sp.getInt("sl_start", 5200)
+                  slMid = sp.getInt("sl_mid", 5800)
+                  slMax = sp.getInt("sl_max", 6400)
+                  slFlash = sp.getBoolean("sl_flash", true)
+
                   customSpecs.clear()
                   sp.getString("custom_pids", null)?.let { jsonStr ->
                       runCatching {
@@ -490,6 +501,7 @@ jobs:
                   e.putBoolean("master", master).putInt("snd", snd).putString("uri", uri)
                       .putInt("cool", cool).putBoolean("vibe", vibe).putInt("shiftRpm", shiftRpm)
                       .putInt("dark_theme_opt", darkThemeOpt).putInt("accent_color_idx", accentColorIdx)
+                      .putInt("sl_start", slStart).putInt("sl_mid", slMid).putInt("sl_max", slMax).putBoolean("sl_flash", slFlash)
                   alerts.forEach { (k, a) -> e.putString("al_$k", "${if (a.on) 1 else 0},${if (a.above) 1 else 0},${a.v}") }
 
                   val arrCust = JSONArray()
@@ -1111,9 +1123,10 @@ jobs:
                               val navItems = listOf(
                                   Triple("Cockpit", Icons.Rounded.Speed, 0),
                                   Triple("Dragy", Icons.Rounded.Timer, 1),
-                                  Triple("Logs", Icons.Rounded.FiberManualRecord, 2),
-                                  Triple("Alertas", Icons.Rounded.NotificationsActive, 3),
-                                  Triple("Ajustes", Icons.Rounded.Tune, 4)
+                                  Triple("ShiftLight", Icons.Rounded.FlashOn, 2),
+                                  Triple("Logs", Icons.Rounded.FiberManualRecord, 3),
+                                  Triple("Alertas", Icons.Rounded.NotificationsActive, 4),
+                                  Triple("Ajustes", Icons.Rounded.Tune, 5)
                               )
                               navItems.forEach { (n, ic, i) ->
                                   NavigationBarItem(
@@ -1136,8 +1149,9 @@ jobs:
                           when (tab) {
                               0 -> Panel()
                               1 -> PerformanceScreen()
-                              2 -> DatalogScreen()
-                              3 -> Alerts()
+                              2 -> BigShiftLightScreen()
+                              3 -> DatalogScreen()
+                              4 -> Alerts()
                               else -> EcuAndAboutScreen()
                           }
                       }
@@ -1163,6 +1177,76 @@ jobs:
                           confirmButton = {},
                           dismissButton = { TextButton(onClick = { devs = null }) { Text("Cancelar") } }
                       )
+                  }
+              }
+
+              @Composable
+              private fun BigShiftLightScreen() {
+                  val rpm = live["rpm"] ?: 0.0
+                  val isRedline = rpm >= slMax
+                  val isWarn = rpm >= slMid && !isRedline
+                  val isEarly = rpm >= slStart && !isWarn && !isRedline
+
+                  val screenBg = when {
+                      isRedline -> ErrCol
+                      isWarn -> Color(0xFFFFAB00)
+                      isEarly -> MaterialTheme.colorScheme.primary
+                      else -> MaterialTheme.colorScheme.surface
+                  }
+
+                  val textColor = if (isRedline || isWarn || isEarly) Color(0xFF090A0D) else MaterialTheme.colorScheme.onSurface
+
+                  Column(
+                      Modifier.fillMaxSize().background(screenBg).padding(20.dp),
+                      horizontalAlignment = Alignment.CenterHorizontally,
+                      verticalArrangement = Arrangement.Center
+                  ) {
+                      Text(
+                          if (isRedline) "SHIFT! TROQUE!" else if (isWarn) "ATENÇÃO!" else "GIRO DO MOTOR",
+                          style = MaterialTheme.typography.titleLarge.copy(fontFamily = FontFamily.Monospace),
+                          color = textColor, fontWeight = FontWeight.Bold
+                      )
+                      Spacer(Modifier.height(10.dp))
+                      Text(
+                          "${rpm.toInt()}",
+                          style = MaterialTheme.typography.displayLarge.copy(fontFamily = FontFamily.Monospace, fontSize = 84.sp),
+                          color = textColor, fontWeight = FontWeight.Black
+                      )
+                      Text("RPM", style = MaterialTheme.typography.titleMedium.copy(fontFamily = FontFamily.Monospace), color = textColor)
+
+                      Spacer(Modifier.height(30.dp))
+                      Card(
+                          colors = cc(MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)),
+                          shape = RoundedCornerShape(14.dp),
+                          modifier = Modifier.fillMaxWidth()
+                      ) {
+                          Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                              Text("Ajustes do Shift Light Gigante", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                              Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                  OutlinedTextField(
+                                      value = slStart.toString(),
+                                      onValueChange = { slStart = it.toIntOrNull() ?: slStart; save() },
+                                      label = { Text("Início (RPM)") },
+                                      modifier = Modifier.weight(1f),
+                                      keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                                  )
+                                  OutlinedTextField(
+                                      value = slMid.toString(),
+                                      onValueChange = { slMid = it.toIntOrNull() ?: slMid; save() },
+                                      label = { Text("Alerta (RPM)") },
+                                      modifier = Modifier.weight(1f),
+                                      keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                                  )
+                                  OutlinedTextField(
+                                      value = slMax.toString(),
+                                      onValueChange = { slMax = it.toIntOrNull() ?: slMax; save() },
+                                      label = { Text("Corte (RPM)") },
+                                      modifier = Modifier.weight(1f),
+                                      keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                                  )
+                              }
+                          }
+                      }
                   }
               }
 
@@ -1682,7 +1766,6 @@ jobs:
                   val peakFrac = (((peak ?: p.lo) - p.lo) / (p.hi - p.lo)).toFloat().coerceIn(0f, 1f)
                   val anim by animateFloatAsState(frac, animationSpec = tween(140), label = "gauge")
 
-                  // CORES EXTRAÍDAS FORA DO CANVAS (Corrige o erro de compilação das linhas 1533/1535/1540!)
                   val trackCol = MaterialTheme.colorScheme.surfaceVariant
                   val priCol = MaterialTheme.colorScheme.primary
                   val secCol = MaterialTheme.colorScheme.secondary
@@ -2082,7 +2165,6 @@ jobs:
                       Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
                       verticalArrangement = Arrangement.spacedBy(12.dp)
                   ) {
-                      // Customização de Tema e Cores
                       Card(colors = cc(), shape = RoundedCornerShape(12.dp), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline), modifier = Modifier.fillMaxWidth()) {
                           Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                               Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -2121,10 +2203,9 @@ jobs:
                           }
                       }
 
-                      // Diagnóstico de Falhas ECU
                       Card(colors = cc(), shape = RoundedCornerShape(12.dp), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline), modifier = Modifier.fillMaxWidth()) {
                           Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                              Text("Avarias da Injeção (Bosch MED17.4.2)", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                              Text("Diagnóstico Bosch MED17.4.2", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                               Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                   Button(enabled = ok, shape = RoundedCornerShape(8.dp), onClick = { readDtc() }) {
                                       Icon(Icons.Rounded.Search, contentDescription = null)
@@ -2142,7 +2223,6 @@ jobs:
 
                       DtcSection(ok = ok, dtcList = dtcList, thpMap = thpDtcMap)
 
-                      // Sobre e Créditos do Criador
                       Card(colors = cc(), shape = RoundedCornerShape(12.dp), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline), modifier = Modifier.fillMaxWidth()) {
                           Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                               Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
