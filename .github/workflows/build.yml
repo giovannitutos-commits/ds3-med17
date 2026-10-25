@@ -15,7 +15,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.7
-      - name: Gerar projeto Android nativo (MED17 Dash v8.4)
+      - name: Gerar projeto Android nativo (MED17 Dash v8.5)
         run: |
           mkdir -p app/src/main/java/br/local/ds3 app/src/main/res/values app/src/main/res/drawable app/src/main/res/mipmap-anydpi-v26
           cat > settings.gradle.kts <<'EOF'
@@ -46,8 +46,8 @@ jobs:
                   applicationId = "br.local.ds3"
                   minSdk = 26
                   targetSdk = 34
-                  versionCode = 23
-                  versionName = "8.4"
+                  versionCode = 24
+                  versionName = "8.5"
               }
               compileOptions {
                   sourceCompatibility = JavaVersion.VERSION_17
@@ -1486,7 +1486,7 @@ jobs:
                       if (gauge) Gauge(p, Modifier.fillMaxWidth(), sz) else Metric(p, sz)
                       if (editLayoutMode) {
                           Surface(
-                              color = MaterialTheme.colorScheme.background.copy(alpha = 0.88f),
+                              color = MaterialTheme.colorScheme.background.copy(0.88f),
                               shape = RoundedCornerShape(if (gauge) 24.dp else 18.dp),
                               modifier = Modifier.matchParentSize()
                           ) {
@@ -2041,7 +2041,7 @@ jobs:
                                   Icon(Icons.Rounded.Info, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                                   Text("Sobre o MED17 Dash", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                               }
-                              Text("Versão do App: 8.4 (Build Pro)", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                              Text("Versão do App: 8.5 (Build Pro)", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
                               Text("Desenvolvido por: Giovanni Stocco", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
                               Text(
                                   "Software especializado de telemetria automotiva, leitura em tempo real via protocolo UDS (Modo 22) e OBD2 para centrais de injeção Bosch MED17.4.2 (motores THP / PSA).",
