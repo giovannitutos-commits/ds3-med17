@@ -15,7 +15,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.7
-      - name: Gerar projeto Android nativo (MED17 Dash v8.5)
+      - name: Gerar projeto Android nativo (MED17 Dash v8.6)
         run: |
           mkdir -p app/src/main/java/br/local/ds3 app/src/main/res/values app/src/main/res/drawable app/src/main/res/mipmap-anydpi-v26
           cat > settings.gradle.kts <<'EOF'
@@ -46,8 +46,8 @@ jobs:
                   applicationId = "br.local.ds3"
                   minSdk = 26
                   targetSdk = 34
-                  versionCode = 24
-                  versionName = "8.5"
+                  versionCode = 25
+                  versionName = "8.6"
               }
               compileOptions {
                   sourceCompatibility = JavaVersion.VERSION_17
