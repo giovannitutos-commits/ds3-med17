@@ -1,0 +1,88 @@
+name: FrenchDiag iOS Settings Screenshots
+on:
+  push:
+    branches: [frenchdiag-ios]
+    paths:
+      - '.github/workflows/screenshots.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: frenchdiag-settings-screenshots-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  screenshots:
+    runs-on: macos-15
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: ios
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select Xcode with iOS 26 SDK
+        run: |
+          python3 - <<'PY'
+          import pathlib,re,subprocess
+          options=[]
+          for p in pathlib.Path('/Applications').glob('Xcode*.app'):
+              dev=p/'Contents/Developer'
+              result=subprocess.run(['xcrun','--sdk','iphoneos','--show-sdk-version'],env={**__import__('os').environ,'DEVELOPER_DIR':str(dev)},capture_output=True,text=True)
+              if result.returncode==0:
+                  version=tuple(int(x) for x in result.stdout.strip().split('.'))
+                  if version[0]>=26:options.append((version,str(dev)))
+          if not options:raise SystemExit('An Xcode installation with iOS SDK 26+ is required for native Liquid Glass.')
+          chosen=max(options)[1]
+          subprocess.run(['sudo','xcode-select','-s',chosen],check=True)
+          print(chosen)
+          PY
+          xcodebuild -version
+      - name: Generate resources and Xcode project
+        run: |
+          brew install xcodegen
+          python3 scripts/prepare_resources.py
+          swift scripts/icon.swift Resources
+          xcodegen generate
+      - name: Choose iPhone simulator
+        run: |
+          python3 - <<'PY'
+          import json,subprocess,os
+          devices=json.loads(subprocess.check_output(['xcrun','simctl','list','devices','available','-j']))['devices']
+          choices=[(runtime,d['udid']) for runtime,items in devices.items() for d in items if d.get('isAvailable') and 'iPhone' in d['name']]
+          if not choices:raise SystemExit('No available iPhone simulator')
+          runtime,udid=sorted(choices,reverse=True)[0]
+          with open(os.environ['GITHUB_ENV'],'a') as f:f.write('SIMULATOR_ID='+udid+'\n')
+          print(runtime,udid)
+          PY
+      - name: Capture settings without changing the application
+        run: |
+          python3 - <<'PYCODE'
+          from pathlib import Path
+          path=Path('UITests/SmokeTests.swift')
+          text=path.read_text()
+          anchor='XCTAssertTrue(app.navigationBars["Configurações"].waitForExistence(timeout:5))'
+          assert text.count(anchor)==1
+          extra='\n        let settingsCapture=XCTAttachment(screenshot:app.screenshot())\n        settingsCapture.name="Configuracoes-1-Conexao";settingsCapture.lifetime = .keepAlways;add(settingsCapture)\n        for index in 2...4 {\n            app.swipeUp()\n            let capture=XCTAttachment(screenshot:app.screenshot())\n            capture.name="Configuracoes-"+String(index);capture.lifetime = .keepAlways;add(capture)\n        }\n'
+          path.write_text(text.replace(anchor,anchor+extra))
+          PYCODE
+      - name: Run native iPhone UI test
+        timeout-minutes: 15
+        run: |
+          set -o pipefail
+          xcodebuild test -project FrenchDiag.xcodeproj -scheme FrenchDiag -only-testing:FrenchDiagUITests -destination "platform=iOS Simulator,id=$SIMULATOR_ID" -derivedDataPath build-simulator -resultBundlePath Settings.xcresult -parallel-testing-enabled NO -test-timeouts-enabled YES -default-test-execution-time-allowance 120 -maximum-test-execution-time-allowance 180 CODE_SIGNING_ALLOWED=NO 2>&1 | tee settings-test.log
+      - name: Export screenshots
+        if: always() && !cancelled()
+        timeout-minutes: 2
+        run: |
+          if [ -d Settings.xcresult ]; then
+            xcrun xcresulttool export attachments --path Settings.xcresult --output-path settings-screenshots
+          fi
+      - name: Save simulator screenshots
+        if: always() && !cancelled()
+        uses: actions/upload-artifact@v4
+        with:
+          name: FrenchDiag-iOS-Settings-Screenshots
+          path: |
+            ios/settings-screenshots
+            ios/settings-test.log
+          retention-days: 30
+          if-no-files-found: error
