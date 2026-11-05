@@ -3,7 +3,11 @@ import Network
 import CoreBluetooth
 import Combine
 
-@MainActor final class ELMTransport: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeripheralDelegate {
+@MainActor protocol ELMCommands:AnyObject {func command(_ command:String,timeout:Double,recoverTimeout:Bool) async throws ->String}
+extension ELMCommands {
+    func command(_ command:String,timeout:Double=5) async throws ->String {try await self.command(command,timeout:timeout,recoverTimeout:false)}
+}
+@MainActor final class ELMTransport: NSObject, ObservableObject, @preconcurrency CBCentralManagerDelegate, @preconcurrency CBPeripheralDelegate, ELMCommands {
     struct Device: Identifiable { var id: UUID; var name: String }
     @Published var devices:[Device]=[]
     @Published var bluetoothState="Bluetooth não iniciado"
@@ -12,6 +16,7 @@ import Combine
     private var tcp:NWConnection?; private var central:CBCentralManager?; private var peripherals:[UUID:CBPeripheral]=[:]
     private var peripheral:CBPeripheral?; private var tx:CBCharacteristic?; private var rx:CBCharacteristic?
     private var connected:CheckedContinuation<Void,Error>?; private var pending:CheckedContinuation<String,Error>?
+    private var recovering=false
     private var response=""; private var deadline:Task<Void,Never>?; private var connectionDeadline:Task<Void,Never>?
     private var generation=0
     var writeUUID="";var notifyUUID=""
@@ -66,34 +71,42 @@ import Combine
         if response.utf8.count>131072{fail(AppError("Resposta do adaptador excedeu o limite."));return}
         if response.contains(">") {
             let messages=Decoder.messages(response)
-            if let last=messages.last,last.hasPrefix("7F"),last.hasSuffix("78") {response=response.replacingOccurrences(of:">",with:"\n");return}
-            deadline?.cancel();let c=pending;pending=nil;note("RX "+response);c?.resume(returning:response)
+            if !recovering,let last=messages.last,last.hasPrefix("7F"),last.hasSuffix("78") {response=response.replacingOccurrences(of:">",with:"\n");return}
+            deadline?.cancel();let c=pending;pending=nil;note("RX "+response);c?.resume(returning:response+(recovering ? "\rSTOPPED":""))
         }
     }
-    func command(_ command:String,timeout:Double=5) async throws -> String {
+    func command(_ command:String,timeout:Double=5,recoverTimeout:Bool=false) async throws -> String {
         try Task.checkCancellation();try require(pending == nil,"Há outra solicitação OBD em andamento.")
         try require(command.range(of:"^[A-Za-z0-9 ]+$",options:.regularExpression) != nil,"Comando inválido.")
-        generation+=1;let token=generation;response="";note("TX "+command)
+        generation+=1;let token=generation;response="";recovering=false;note("TX "+command)
         return try await withCheckedThrowingContinuation { cont in
             pending=cont;exchanges+=1
-            deadline=Task {try? await Task.sleep(nanoseconds:UInt64(timeout*1_000_000_000));if !Task.isCancelled && self.generation==token {self.timeouts+=1;self.fail(AppError("Tempo esgotado: \(command)"));self.close()}}
+            deadline=Task {
+                try? await Task.sleep(nanoseconds:UInt64(timeout*1_000_000_000))
+                if !Task.isCancelled && self.generation==token {
+                    self.timeouts+=1
+                    if recoverTimeout {
+                        self.recovering=true;self.note("Timeout opcional; interrompendo consulta e aguardando novo prompt.");self.send(Data(" ".utf8))
+                        self.deadline=Task {try? await Task.sleep(nanoseconds:1_000_000_000);if !Task.isCancelled && self.generation==token {self.fail(AppError("Não foi possível recuperar o prompt após \(command)."));self.close()}}
+                    }else{self.fail(AppError("Tempo esgotado: \(command)"));self.close()}
+                }
+            }
             let data=Data((command+"\r").utf8)
-            if let c=tcp {c.send(content:data,completion:.contentProcessed{[weak self]error in if let error=error{Task{@MainActor in self?.fail(error)}}})}
-            else if let p=peripheral,let tx=tx {
-                let type:CBCharacteristicWriteType=tx.properties.contains(.write) ? .withResponse:.withoutResponse
-                let size=p.maximumWriteValueLength(for:type)
-                if data.count>size {fail(AppError("Comando excede o MTU BLE; use Wi-Fi para esta rotina."))}else{p.writeValue(data,for:tx,type:type)}
-            }else{fail(AppError("Adaptador desconectado."))}
+            send(data)
         }
+    }
+    private func send(_ data:Data){
+        if let c=tcp{c.send(content:data,completion:.contentProcessed{[weak self]error in if let error=error{Task{@MainActor in self?.fail(error)}}})}
+        else if let p=peripheral,let tx=tx{let type:CBCharacteristicWriteType=tx.properties.contains(.write) ? .withResponse:.withoutResponse;let size=p.maximumWriteValueLength(for:type);if data.count>size{fail(AppError("Comando excede o MTU BLE; use Wi-Fi para esta rotina."))}else{p.writeValue(data,for:tx,type:type)}}else{fail(AppError("Adaptador desconectado."))}
     }
     func fail(_ error:Error){deadline?.cancel();connectionDeadline?.cancel();let c=connected;connected=nil;let p=pending;pending=nil;c?.resume(throwing:error);p?.resume(throwing:error)}
     func close(){generation+=1;fail(AppError("Conexão encerrada."));let c=tcp;tcp=nil;c?.cancel();if let p=peripheral{peripheral=nil;central?.cancelPeripheralConnection(p)};tx=nil;rx=nil}
 }
 
 @MainActor final class PSASession {
-    let elm:ELMTransport;let catalog:Catalog;var keepAlive="3E";var software:Int?;var last=Date.distantPast;var category=0;var protocolName="CAN";var tpmsReceive:String?
+    let elm:any ELMCommands;let catalog:Catalog;var keepAlive="3E";var software:Int?;var last=Date.distantPast;var category=0;var protocolName="CAN";var tpmsReceive:String?
     static let addresses:[Int:(String,String)]=[0:("6A8","688"),1:("76D","66D"),2:("765","665"),3:("6AD","68D"),4:("6B5","695"),5:("6C1","601"),6:("75F","65F"),7:("760","660"),8:("6A9","689")]
-    init(_ elm:ELMTransport,_ catalog:Catalog){self.elm=elm;self.catalog=catalog}
+    init(_ elm:any ELMCommands,_ catalog:Catalog){self.elm=elm;self.catalog=catalog}
     func ok(_ command:String) async throws {let raw=try await elm.command(command);try require(raw.uppercased().contains("OK"),"O adaptador rejeitou \(command).")}
     func setup(category:Int,protocolName:String) async throws {
         self.category=category;self.protocolName=protocolName;_ = try await elm.command("ATZ",timeout:8)
@@ -134,7 +147,7 @@ import Combine
         var result:Reading?;var failure:Error?
         do {
             try await ok("ATSH6AF");if let rx=tpmsReceive{try await ok("ATCRA"+rx)}else{try await ok("ATCF000");try await ok("ATCM000")};try await ok("ATH1")
-            let raw=try await elm.command(p.command,timeout:3)
+            let raw=try await elm.command(p.command,timeout:1.2,recoverTimeout:true)
             let (payload,rx)=try Decoder.tpmsPayload(raw,p.command);if let rx=rx{tpmsReceive=rx};result=Decoder.canonical(payload,p.command).flatMap{Decoder.tpms(p,$0)}
         }catch{failure=error}
         // Restoration is mandatory even when the module reports NO DATA.

@@ -173,9 +173,16 @@ enum Decoder {
         while !data.isEmpty {let item=String(data.prefix(width));data=String(data.dropFirst(width));if item.prefix(6)=="FFFFFF" || item.prefix(4)=="0000" {continue};guard let code=Int(item.prefix(4),radix:16) else{return nil};let d=definitions[code] ?? ["Definição não encontrada para este perfil",""];result.append(Fault(code:Self.code(code),status:String(item.suffix(2)),description:d[0],detail:d[1],rawCode:String(item.prefix(width==8 ? 6:4)),subtype:width==8 ? item.slice(4,6):""))}
         return result
     }
-    static func genericFaults(_ raw:String)->[Fault]? {
+    static func supported(_ raw:String,base:Int)->Set<String>? {
+        let prefix="41"+String(format:"%02X",base)
+        guard let message=messages(raw).first(where:{$0.hasPrefix(prefix)}),message.count>=12 else{return nil}
+        let bytes=stride(from:4,to:12,by:2).compactMap{Int(message.slice($0,$0+2),radix:16)}
+        guard bytes.count==4 else{return nil}
+        return Set((1...32).filter{offset in ((bytes[(offset-1)/8]>>(7-(offset-1)%8))&1)==1}.map{String(format:"%02X",base+$0)})
+    }
+    static func genericFaults(_ raw:String,can:Bool=true)->[Fault]? {
         let messages=messages(raw).filter{$0.hasPrefix("43")};guard !messages.isEmpty else{return nil};var result:[Fault]=[]
-        for msg in messages {guard msg.count>=4,let count=Int(msg.slice(2,4),radix:16),msg.count>=4+count*4 else{return nil};for i in 0..<count {let item=msg.slice(4+i*4,8+i*4);guard let code=Int(item,radix:16) else{return nil};if code != 0 {result.append(Fault(code:Self.code(code),status:"",description:"DTC OBD-II",detail:"",rawCode:item,subtype:""))}}}
+        for msg in messages {let data=String(msg.dropFirst(2));let count:Int;let start:Int;if can{guard data.count>=2,let n=Int(data.prefix(2),radix:16),data.count>=2+n*4 else{return nil};count=n;start=2}else{guard data.count%4==0 else{return nil};count=data.count/4;start=0};for i in 0..<count {let item=data.slice(start+i*4,start+4+i*4);guard let code=Int(item,radix:16) else{return nil};if code != 0 {result.append(Fault(code:Self.code(code),status:"",description:"DTC OBD-II",detail:"",rawCode:item,subtype:""))}}}
         return result
     }
     static func tpmsPayload(_ raw:String,_ cmd:String)throws->(String,String?) {

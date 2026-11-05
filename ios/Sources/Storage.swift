@@ -35,7 +35,15 @@ enum Store {
         var lines=["FrenchDiag · Relatório de oficina","Veículo: "+capture.vehicle,"Central: "+capture.profile,"Etapa: "+capture.stage,"Origem: "+capture.source,"Consulta: "+capture.at.formatted(),"","Falhas retornadas nesta consulta:"]
         lines+=capture.faults.map{$0.fullCode+" · "+$0.description+" · status "+$0.status}
         if capture.faults.isEmpty{lines.append("Nenhuma nesta consulta.")}
-        if let b=before {let old=Set(b.faults.map{$0.fullCode}),new=Set(capture.faults.map{$0.fullCode});lines += ["","Comparação com "+b.at.formatted(),"Novos: "+new.subtracting(old).sorted().joined(separator:", "),"Não retornaram: "+old.subtracting(new).sorted().joined(separator:", "),"Persistentes: "+old.intersection(new).sorted().joined(separator:", ")]}
+        if let b=before {
+            let old:Set<String>=Set(b.faults.map{$0.fullCode})
+            let current:Set<String>=Set(capture.faults.map{$0.fullCode})
+            let added:String=current.subtracting(old).sorted().joined(separator:", ")
+            let removed:String=old.subtracting(current).sorted().joined(separator:", ")
+            let persistent:String=old.intersection(current).sorted().joined(separator:", ")
+            lines.append("");lines.append("Comparação com "+b.at.formatted())
+            lines.append("Novos: "+added);lines.append("Não retornaram: "+removed);lines.append("Persistentes: "+persistent)
+        }
         lines.append("");lines.append("Leituras disponíveis (unidades da ECU):")
         for key in capture.readings.keys.sorted(){let r=capture.readings[key]!;let old=before?.readings[key];lines.append("\(Catalog.titles[key] ?? key): \(r.display) \(capture.units[key] ?? "") · aquisição \(r.at.formatted())"+(old.map{" · antes: "+$0.display} ?? ""))}
         lines += ["","Ausente não equivale a zero. Não retornar um DTC não comprova reparo.","Freeze frame: a data é a consulta; instante da falha não é informado.","Leituras ao vivo não representam o estado gravado no instante da falha."]

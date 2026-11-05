@@ -4,7 +4,7 @@ import Combine
 import CoreLocation
 import AudioToolbox
 
-@MainActor final class Dashboard: NSObject, ObservableObject, CLLocationManagerDelegate {
+@MainActor final class Dashboard: NSObject, ObservableObject, @preconcurrency CLLocationManagerDelegate {
     @Published var prefs=Store.load("preferences.json",Preferences())
     @Published var connected=false;@Published var connecting=false;@Published var busy=false;@Published var actionRunning=false
     @Published var status="Pronto para conectar";@Published var message:String?;@Published var error:String?
@@ -17,6 +17,7 @@ import AudioToolbox
     @Published var moduleReadings:[String:[String:Reading]]=[:]
     let elm=ELMTransport();var catalog:Catalog?;var session:PSASession?
     private var worker:Task<Void,Never>?;private var pending:[Operation]=[];private var stopRequested=false;private var disconnectRequested=false
+    private var canGeneric=true
     private var recordingSession:SessionInfo?;private var lastRecord=Date.distantPast;private var lastFault=Date.distantPast;private var lastModule=Date.distantPast
     private var activeAlarm:[String:String]=[:];private var lastAlarm:[String:Date]=[:];private var lastShift=false
     private var backgroundTask:UIBackgroundTaskIdentifier = .invalid
@@ -37,6 +38,10 @@ import AudioToolbox
     func layout(_ landscape:Bool)->LayoutConfig{prefs.layouts[profile.name+(landscape ? ":landscape":":portrait")] ?? Self.defaults(params,landscape)}
     func setLayout(_ config:LayoutConfig,_ landscape:Bool){prefs.layouts[profile.name+(landscape ? ":landscape":":portrait")]=config;save()}
     func meters()->[Meter]{prefs.meters[profile.name] ?? [Meter(key:profile.name=="OBD-II" ? "0C":"Revs",maximum:6000),Meter(key:profile.name=="OBD-II" ? "05":"Coolant",maximum:140),Meter(key:profile.name=="OBD-II" ? "0B":"TurboPress",maximum:profile.name=="OBD-II" ? 255:3000)]}
+    func updateTPMS(){
+        if prefs.tpms && profile.category==0 && profile.name != "OBD-II" {for landscape in [false,true]{var config=layout(landscape);for p in Catalog.tpms.usable where !config.selected.contains(p.label){config.selected.append(p.label);config.tiles[p.label]=Tile(span:landscape ? 2:1,maximum:Double(p.limit))};setLayout(config,landscape)}}
+        save()
+    }
     func ensureDefaults(){for landscape in [false,true]{let key=profile.name+(landscape ? ":landscape":":portrait");if prefs.layouts[key]==nil{prefs.layouts[key]=Self.defaults(params,landscape)}}}
     static let cardRows=[["Gear","FuelLevel","ExternalTemp","IntakeAirPressInstr","IntakeAirPress"],["FuelPressInstr","FuelPress","FuelPressReg","AlternatorTemp","AlternatorCurrent","ECUtemp"],["UpO2Volt","DownO2Volt","UpO2Heat","DownO2Heat","UpMixCorr","DownMixCorr"]]
     static let pressureBars=["Revs","TurboInstr","TurboPress","OilPressInstr","OilPress"]
@@ -81,9 +86,15 @@ import AudioToolbox
                 if prefs.transport=="Wi-Fi"{guard let port=UInt16(prefs.port),port>0,!prefs.host.isEmpty else{throw AppError("Endereço ou porta inválidos.")};try await elm.connectWiFi(host:prefs.host,port:port)}
                 else{guard let id=UUID(uuidString:prefs.bleID) else{throw AppError("Selecione um adaptador BLE.")};try await elm.connectBLE(id)}
                 if prefs.profile=="OBD-II" {
-                    for cmd in ["ATZ","ATE0","ATL0","ATS0","ATH0","ATSP0"]{_ = try await elm.command(cmd,timeout:8)}
+                    _ = try await elm.command("ATZ",timeout:8)
+                    for cmd in ["ATE0","ATL0","ATS0","ATH0","ATSP0"]{let response=try await elm.command(cmd);try require(response.uppercased().contains("OK"),"O adaptador rejeitou \(cmd).")}
                     let raw=try await elm.command("0100",timeout:12);try require(Decoder.messages(raw).contains{$0.hasPrefix("4100")},"O adaptador não retornou dados OBD-II válidos.")
-                    profile=Catalog.generic;session=nil
+                    guard var supported=Decoder.supported(raw,base:0) else{throw AppError("Tabela OBD-II incompleta.")}
+                    if supported.contains("20"),let next=Decoder.supported(try await elm.command("0120",timeout:6),base:0x20){supported.formUnion(next)}
+                    if supported.contains("40"),let next=Decoder.supported(try await elm.command("0140",timeout:6),base:0x40){supported.formUnion(next)}
+                    let proto=try await elm.command("ATDPN");let compact=proto.replacingOccurrences(of:">",with:"").trimmingCharacters(in:.whitespacesAndNewlines).uppercased();let value=compact.hasPrefix("A") ? String(compact.dropFirst()):compact
+                    try require(value.count==1 && "123456789ABC".contains(value),"Protocolo OBD-II não identificado pelo ELM.")
+                    canGeneric="6789ABC".contains(value);profile=Catalog.generic;profile.parameters=profile.parameters.filter{supported.contains($0.label)};session=nil
                 }else {
                     let selected=profiles.first{$0.name==prefs.profile};let cat=selected?.category ?? prefs.category
                     let psa=PSASession(elm,catalog);session=psa;status="Preparando protocolo PSA…";try await psa.setup(category:cat,protocolName:prefs.protocolName)
@@ -129,11 +140,12 @@ import AudioToolbox
             let result:Reading?
             if profile.name=="OBD-II" {result=Decoder.pid(raw,p.label).map{Reading(value:$0,display:number($0,p.label=="42" ? 2:1))}}
             else if profile.category==9 {let (payload,_)=try Decoder.tpmsPayload(raw,cmd);result=Decoder.canonical(payload,cmd).flatMap{Decoder.tpms(p,$0)}}
-            else if var canonical=Decoder.canonical(raw,cmd,telemetry:true) {
+            else if let canonical=Decoder.canonical(raw,cmd,telemetry:true) {
                 var param=p
                 if p.label=="AutoSelector",canonical.hasPrefix("0562D4E7"),canonical.count==12{param.end=12}
                 // No transform 16 values are shown until the ECU software version is known.
-                if canonical.isEmpty{canonical=""};result=Decoder.decode(param,canonical,software:session?.software)
+                let decoded=Decoder.decode(param,canonical,software:session?.software)
+                result=param.label=="AutoSelector" && ![0.0,1.0,2.0,3.0,6.0].contains(decoded?.value ?? -1) ? nil:decoded
             }else{result=nil}
             publish(p,result)
         }
@@ -150,7 +162,7 @@ import AudioToolbox
             try require(profile.category != 9,"O perfil TPMS contém apenas leituras.")
             let cmd=s.keepAlive=="3E00" ? "1902FF":"17FF00";let raw=try await s.request(cmd,timeout:10)
             result=Decoder.faults(raw,cmd,definitions:catalog?.faults(profile.name) ?? [:])
-        }else{result=Decoder.genericFaults(try await elm.command("03",timeout:10))}
+        }else{result=Decoder.genericFaults(try await elm.command("03",timeout:10),can:canGeneric)}
         guard let result=result else{throw AppError("Resposta de falhas inválida. Ausência de resposta não significa ausência de DTCs.")}
         let previous=Set(faults.map{$0.fullCode});faults=result;faultsRead=true;faultDate=Date()
         if prefs.dtcMonitor && !Set(result.map{$0.fullCode}).subtracting(previous).isEmpty{message="Novas falhas: "+Set(result.map{$0.fullCode}).subtracting(previous).sorted().joined(separator:", ");AudioServicesPlayAlertSound(1005)}

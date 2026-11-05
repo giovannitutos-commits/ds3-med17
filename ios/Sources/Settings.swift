@@ -15,7 +15,7 @@ struct SettingsView:View {
             Text(m.status).font(.caption).foregroundStyle(.secondary)
         }
         Section("Leituras") {
-            Toggle("ECU e TPMS juntos",isOn:$m.prefs.tpms).onChange(of:m.prefs.tpms){_,_ in m.ensureDefaults();m.save()}
+            Toggle("ECU e TPMS juntos",isOn:$m.prefs.tpms).onChange(of:m.prefs.tpms){_,_ in m.updateTPMS()}
             Text("TPMS usa os oito PIDs do Android, endereço CAN 6AF, com restauração do endereço do motor entre consultas.").font(.caption)
             Stepper("Intervalo: \(number(m.prefs.interval)) s",value:$m.prefs.interval,in:0.2...10,step:0.2)
             Toggle("Monitorar falhas",isOn:$m.prefs.dtcMonitor)

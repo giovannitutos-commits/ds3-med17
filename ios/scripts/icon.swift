@@ -4,8 +4,8 @@ let root=URL(fileURLWithPath:CommandLine.arguments[1])
 let folder=root.appendingPathComponent("Assets.xcassets/AppIcon.appiconset")
 try FileManager.default.createDirectory(at:folder,withIntermediateDirectories:true)
 var images:[[String:String]]=[]
-for (idiom,point,scale) in [("iphone",20,2),("iphone",20,3),("iphone",29,2),("iphone",29,3),("iphone",40,2),("iphone",40,3),("iphone",60,2),("iphone",60,3),("ipad",20,1),("ipad",20,2),("ipad",29,1),("ipad",29,2),("ipad",40,1),("ipad",40,2),("ipad",76,1),("ipad",76,2),("ios-marketing",1024,1)] {
- let n=point*scale
+for (idiom,point,scale) in [("iphone",20,2),("iphone",20,3),("iphone",29,2),("iphone",29,3),("iphone",40,2),("iphone",40,3),("iphone",60,2),("iphone",60,3),("ipad",20,1),("ipad",20,2),("ipad",29,1),("ipad",29,2),("ipad",40,1),("ipad",40,2),("ipad",76,1),("ipad",76,2),("ipad",167,2),("ios-marketing",1024,1)] {
+ let n=point==167 ? 167:point*scale
  let bitmap=NSBitmapImageRep(bitmapDataPlanes:nil,pixelsWide:n,pixelsHigh:n,bitsPerSample:8,samplesPerPixel:4,hasAlpha:true,isPlanar:false,colorSpaceName:.deviceRGB,bytesPerRow:0,bitsPerPixel:0)!
  let context=NSGraphicsContext(bitmapImageRep:bitmap)!
  NSGraphicsContext.saveGraphicsState();NSGraphicsContext.current=context
@@ -17,7 +17,7 @@ for (idiom,point,scale) in [("iphone",20,2),("iphone",20,3),("iphone",29,2),("ip
  NSBezierPath(ovalIn:NSRect(x:466,y:424,width:92,height:92)).fill()
  NSGraphicsContext.restoreGraphicsState()
  let filename="icon-\(idiom)-\(n).png";try bitmap.representation(using:.png,properties:[:])!.write(to:folder.appendingPathComponent(filename))
- images.append(["idiom":idiom,"size":"\(point)x\(point)","scale":"\(scale)x","filename":filename])
+ images.append(["idiom":idiom,"size":point==167 ? "83.5x83.5":"\(point)x\(point)","scale":"\(scale)x","filename":filename])
 }
 let json:[String:Any]=["images":images,"info":["version":1,"author":"xcode"]]
 try JSONSerialization.data(withJSONObject:json,options:.prettyPrinted).write(to:folder.appendingPathComponent("Contents.json"))

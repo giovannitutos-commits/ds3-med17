@@ -23,3 +23,28 @@ final class DecoderTests:XCTestCase {
     func testStatsIgnoreUnavailableAndStale(){let rows=CSV.parse("parameter,value,unit,quality\nX,10,V,valid\nX,20,V,valid\nX,999,V,stale\nX,,V,unavailable\n");let stat=CSV.stats(rows).first;XCTAssertEqual(stat?.count,2);XCTAssertEqual(stat?.mean,15)}
     @MainActor func testDateBlock(){let block=Operations.dateBlock(day:31,month:10,year:2026);XCTAssertEqual(block.count,34);XCTAssertTrue(block.hasPrefix("34CF000000090000001F0A1A000000"))}
 }
+
+@MainActor final class FixtureLink:ELMCommands {
+    var commands:[String]=[];var failTPMS=false
+    func command(_ command:String,timeout:Double,recoverTimeout:Bool)async throws->String {
+        commands.append(command)
+        if command.hasPrefix("AT"){return "OK>"}
+        if command=="22D610" {if failTPMS{throw AppError("TPMS fixture error")};return "6C70562D61008660000>"}
+        if command=="3E" || command=="3E00"{return "7E00>"}
+        return "NO DATA>"
+    }
+}
+final class SessionRoutingTests:XCTestCase {
+    @MainActor func testRestoresEngineAfterTPMS()async throws {
+        let link=FixtureLink();let session=PSASession(link,try Catalog());session.category=0;session.protocolName="CAN"
+        let reading=try await session.tpms(Catalog.tpms.usable[0])
+        XCTAssertEqual(try XCTUnwrap(reading?.value),Double(8*255+102)/69,accuracy:1e-9)
+        XCTAssertTrue(link.commands.contains("ATSH6AF"));XCTAssertEqual(Array(link.commands.suffix(7)),["ATH0","ATCAF1","ATSH6A8","ATCRA688","ATFCSH6A8","ATFCSD300000","ATFCSM1"])
+    }
+    @MainActor func testRestoresEngineWhenTPMSFails()async throws {
+        let link=FixtureLink();link.failTPMS=true;let session=PSASession(link,try Catalog());session.category=0;session.protocolName="CAN"
+        do{_ = try await session.tpms(Catalog.tpms.usable[0]);XCTFail("Expected failure")}catch{}
+        XCTAssertEqual(Array(link.commands.suffix(7)),["ATH0","ATCAF1","ATSH6A8","ATCRA688","ATFCSH6A8","ATFCSD300000","ATFCSM1"])
+    }
+    func testSupportedBitmapsAndLegacyFaults(){XCTAssertTrue(Decoder.supported("410008180000>",base:0)?.contains("0C")==true);XCTAssertFalse(Decoder.supported("410008180000>",base:0)?.contains("42")==true);XCTAssertEqual(Decoder.genericFaults("43C3050000>",can:false)?.first?.code,"U0305")}
+}
