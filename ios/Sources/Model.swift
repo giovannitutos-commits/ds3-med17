@@ -6,7 +6,7 @@ import AudioToolbox
 
 @MainActor final class Dashboard: NSObject, ObservableObject, @preconcurrency CLLocationManagerDelegate {
     @Published var prefs=Store.load("preferences.json",Preferences())
-    @Published var fullShiftVisible=false;@Published var connected=false;@Published var connecting=false;@Published var busy=false;@Published var actionRunning=false
+    @Published var transmissionAutomatic=false;@Published var fullShiftVisible=false;@Published var connected=false;@Published var connecting=false;@Published var busy=false;@Published var actionRunning=false
     @Published var status="Pronto para conectar";@Published var message:String?;@Published var error:String?
     @Published var readings:[String:Reading]=[:];@Published var extrema:[String:(Double,Double)]=[:];@Published var series:[String:[TracePoint]]=[:]
     @Published var faults:[Fault]=[];@Published var faultsRead=false;@Published var faultDate:Date?;@Published var tpmsNotice=""
@@ -54,8 +54,8 @@ import AudioToolbox
         let selected=reference ? order.filter{k in params.contains{$0.label==k}}+params.filter{$0.label.hasPrefix("P_")}.map{$0.label}:params.map{$0.label}
         let columns=landscape ? 12:6;var result=LayoutConfig(columns:columns,selected:selected)
         for p in params {
-            let card = !reference || cardRows.flatMap{$0}.contains(p.label) || p.label.hasPrefix("P_")
-            let style=card ? "card" : pressureBars.contains(p.label) || lowerBars.contains(p.label) ? "bar":"text"
+            let card = (!reference && p.label != "0C") || cardRows.flatMap{$0}.contains(p.label) || p.label.hasPrefix("P_")
+            let style=card ? "card" : pressureBars.contains(p.label) || lowerBars.contains(p.label) || p.label=="0C" ? "bar":"text"
             let span=style != "card" ? columns : landscape ? (["IntakeAirPressInstr","IntakeAirPress"].contains(p.label) ? 3:2) : p.label=="IntakeAirPress" ? 2:1
             result.tiles[p.label]=Tile(style:style,span:span,minimum:0,maximum:Double(max(1,p.limit)),fontSize:landscape ? 12:16)
         }
@@ -104,7 +104,7 @@ import AudioToolbox
                     try require(selected==nil || detected==nil || selected?.name==detected?.name,"A ECU identificada difere do perfil selecionado. Confira a configuração.")
                     guard let active=selected ?? detected else{throw AppError("ECU não identificada. Selecione o perfil correto manualmente.")};profile=active
                 }
-                ensureDefaults();readings=[:];extrema=[:];series=[:];faults=[];faultsRead=false;seenFaults=[];dtcBaseline=false;moduleReadings=[:];moduleFaults=[:];samples=0
+                ensureDefaults();readings=[:];extrema=[:];series=[:];faults=[];faultsRead=false;transmissionAutomatic=false;seenFaults=[];dtcBaseline=false;moduleReadings=[:];moduleFaults=[:];samples=0
                 let commands=Array(Set(profile.usable.filter{!$0.command.hasPrefix("17") && !$0.command.hasPrefix("19")}.map{$0.command})).sorted()
                 let rpmCommand=profile.usable.first{$0.label=="Revs" || $0.label=="0C"}?.command
                 for cmd in ([rpmCommand].compactMap{$0}+commands).prefix(profile.category==9 ? 8:3){try await readGroup(cmd);if readings.values.contains(where:{$0.value != nil}){break}}
@@ -153,6 +153,13 @@ import AudioToolbox
     }
     func publish(_ p:Param,_ reading:Reading?){
         let r=reading ?? Reading(value:nil,display:"—");readings[p.label]=r
+        let positions=Set(p.enums.values)
+        if !transmissionAutomatic && positions.isSuperset(of:["P","R","N","D"]),let value=r.value,let position=p.enums[String(Int(value))],(p.label=="Gear" ? ["P","D"]:["P","R","N","D","M"]).contains(position) {
+            transmissionAutomatic=true
+            if let selector=profile.usable.first(where:{$0.label=="AutoSelector"}){
+                for landscape in [false,true]{var config=layout(landscape);if !config.selected.isEmpty && !config.selected.contains(selector.label),let index=config.selected.firstIndex(where:{["Gear","GearB","GearPos"].contains($0)}){config.selected.insert(selector.label,at:index);config.tiles[selector.label]=Tile(span:landscape ? 2:1,maximum:7);setLayout(config,landscape)}}
+            }
+        }
         if let value=r.value,value.isFinite{let old=extrema[p.label];extrema[p.label]=(min(old?.0 ?? value,value),max(old?.1 ?? value,value))}
         var points=series[p.label] ?? [];points.append(TracePoint(at:r.at,value:r.value));series[p.label]=Array(points.suffix(600))
     }

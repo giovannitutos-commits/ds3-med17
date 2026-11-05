@@ -7,7 +7,7 @@ struct Param: Codable, Identifiable, Hashable {
     var shift: Int; var mask: Int; var frequency: Int
     var id: String { label }
     enum CodingKeys: String, CodingKey { case label, description, command, unit, start, end, kind, style, scale, limit, offset, transform, shift, mask, frequency; case enums = "enum" }
-    var title: String { Catalog.titles[label] ?? label }
+    var title: String {label=="AutoSelector" ? "Seletor P/R/N/D":Catalog.titles[label] ?? label}
     var numeric: Bool { kind != "text" && enums.isEmpty && !["indicator","learning"].contains(style) }
 }
 struct Profile: Codable, Identifiable, Hashable {

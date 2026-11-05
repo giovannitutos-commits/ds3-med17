@@ -7,7 +7,7 @@ struct CSVStat:Identifiable {var key:String;var unit:String;var count:Int;var mi
 enum CSV {
     static func parse(_ text:String,separator:Character=",")->[[String]] {
         var rows:[[String]]=[];var row:[String]=[];var field="";var quoted=false;let chars=Array(text);var i=0
-        while i<chars.count {let c=chars[i];if c=="\""{if quoted && i+1<chars.count && chars[i+1]=="\""{field.append("\"");i+=1}else{quoted.toggle()}}else if c==separator && !quoted{row.append(field);field=""}else if (c=="\n" || c=="\r") && !quoted{if c=="\r" && i+1<chars.count && chars[i+1]=="\n"{i+=1};row.append(field);if row.contains(where:{!$0.isEmpty}){rows.append(row)};row=[];field=""}else{field.append(c)};i+=1}
+        while i<chars.count {let c=chars[i];if c=="\""{if quoted && i+1<chars.count && chars[i+1]=="\""{field.append("\"");i+=1}else{quoted.toggle()}}else if c==separator && !quoted{row.append(field);field=""}else if (c=="\n" || c=="\r" || c=="\r\n") && !quoted{if c=="\r" && i+1<chars.count && chars[i+1]=="\n"{i+=1};row.append(field);if row.contains(where:{!$0.isEmpty}){rows.append(row)};row=[];field=""}else{field.append(c)};i+=1}
         if !field.isEmpty || !row.isEmpty{row.append(field);rows.append(row)};return rows
     }
     static func stats(_ rows:[[String]])->[CSVStat] {
