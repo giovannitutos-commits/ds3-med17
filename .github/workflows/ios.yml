@@ -64,7 +64,8 @@ jobs:
           set -o pipefail
           xcodebuild test-without-building -project FrenchDiag.xcodeproj -scheme FrenchDiag -destination "platform=iOS Simulator,id=$SIMULATOR_ID" -derivedDataPath build-simulator -resultBundlePath TestResults.xcresult -parallel-testing-enabled NO -test-timeouts-enabled YES -default-test-execution-time-allowance 60 -maximum-test-execution-time-allowance 120 CODE_SIGNING_ALLOWED=NO 2>&1 | tee test.log
       - name: Export simulator screenshots
-        if: always()
+        if: always() && !cancelled()
+        timeout-minutes: 2
         continue-on-error: true
         run: |
           if [ -d TestResults.xcresult ]; then
@@ -78,7 +79,7 @@ jobs:
         run: |
           python3 scripts/package_ipa.py
       - name: Preserve test and build logs
-        if: always()
+        if: always() && !cancelled()
         uses: actions/upload-artifact@v4
         with:
           name: FrenchDiag-iOS-Validation

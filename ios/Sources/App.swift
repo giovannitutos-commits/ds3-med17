@@ -30,7 +30,8 @@ struct RootView:View {
     }
     func shell<V:View>(_ title:String,@ViewBuilder content:()->V)->some View {
         NavigationStack{content().navigationTitle(title).navigationBarTitleDisplayMode(.inline).toolbar{
-            ToolbarItem(placement:.topBarLeading){HStack(spacing:4){Circle().fill(m.connected ? .green:m.connecting ? .orange:.gray).frame(width:7,height:7);Text(m.profile.name).font(.caption2).lineLimit(1)}.accessibilityLabel(m.status)}
+            ToolbarItem(placement:.topBarLeading){Circle().fill(m.connected ? .green:m.connecting ? .orange:.gray).frame(width:9,height:9).accessibilityLabel(m.status)}
+            ToolbarItem(placement:.principal){VStack(spacing:0){Text(title).font(.headline).lineLimit(1).minimumScaleFactor(0.7);Text(m.profile.name).font(.caption2).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.6)}}
             ToolbarItem(placement:.topBarTrailing){Button{settings=true}label:{Image(systemName:"gearshape")}.accessibilityLabel("Configurações")}
         }}
     }
@@ -44,9 +45,19 @@ struct SpanKey:LayoutValueKey {static let defaultValue=1}
 struct SpanLayout:Layout {
     var columns:Int;var spacing:CGFloat=4
     func plan(_ proposal:ProposedViewSize,_ subviews:Subviews)->([CGRect],CGSize){
-        let width=proposal.width ?? 360;let c=max(1,columns);let cell=max(1,(width-spacing*CGFloat(c-1))/CGFloat(c));var x=0;var y:CGFloat=0;var rowHeight:CGFloat=0;var frames:[CGRect]=[]
-        for view in subviews {let span=min(c,max(1,view[SpanKey.self]));if x+span>c{x=0;y+=rowHeight+spacing;rowHeight=0};let w=cell*CGFloat(span)+spacing*CGFloat(span-1);let size=view.sizeThatFits(ProposedViewSize(width:w,height:nil));frames.append(CGRect(x:CGFloat(x)*(cell+spacing),y:y,width:w,height:size.height));rowHeight=max(rowHeight,size.height);x+=span;if x==c{x=0;y+=rowHeight+spacing;rowHeight=0}}
-        return(frames,CGSize(width:width,height:y+rowHeight))
+        let width=proposal.width ?? 360;let c=max(1,columns)
+        let cell=max(1,(width-spacing*CGFloat(c-1))/CGFloat(c))
+        var x=0;var y:CGFloat=0;var rowHeight:CGFloat=0;var rowStart=0;var frames:[CGRect]=[]
+        func finishRow(){for index in rowStart..<frames.count{frames[index].size.height=rowHeight};y+=rowHeight+spacing;rowStart=frames.count;x=0;rowHeight=0}
+        for view in subviews {
+            let span=min(c,max(1,view[SpanKey.self]));if x+span>c && x>0{finishRow()}
+            let w=cell*CGFloat(span)+spacing*CGFloat(span-1)
+            let size=view.sizeThatFits(ProposedViewSize(width:w,height:nil))
+            frames.append(CGRect(x:CGFloat(x)*(cell+spacing),y:y,width:w,height:size.height))
+            rowHeight=max(rowHeight,size.height);x+=span;if x==c{finishRow()}
+        }
+        if rowStart<frames.count{finishRow()}
+        return(frames,CGSize(width:width,height:max(0,y-spacing)))
     }
     func sizeThatFits(proposal:ProposedViewSize,subviews:Subviews,cache:inout ())->CGSize{plan(proposal,subviews).1}
     func placeSubviews(in bounds:CGRect,proposal:ProposedViewSize,subviews:Subviews,cache:inout ()){let frames=plan(ProposedViewSize(width:bounds.width,height:nil),subviews).0;for (i,frame) in frames.enumerated(){subviews[i].place(at:CGPoint(x:bounds.minX+frame.minX,y:bounds.minY+frame.minY),proposal:ProposedViewSize(frame.size))}}
@@ -60,7 +71,7 @@ struct PanelView:View {
             if !m.connected && !m.connecting {HStack{Text(m.status).font(.caption).foregroundStyle(.secondary);Spacer();Button("Conectar"){m.connect()}.buttonStyle(.bordered)}.padding(.vertical,4)}
             if m.prefs.shiftEnabled && config.shiftPosition==0{ShiftStrip()}
             SpanLayout(columns:config.columns,spacing:config.dense ? 3:8){
-                ForEach(config.selected,id:\.self){key in if let p=m.params.first(where:{$0.label==key}){let tile=config.tiles[key] ?? Tile();ParameterTile(p:p,tile:tile,units:config.showUnits).layoutValue(key:SpanKey.self,value:tile.style=="card" ? tile.span:config.columns)}}
+                ForEach(config.selected,id:\.self){key in if let p=m.params.first(where:{$0.label==key}){let tile=config.tiles[key] ?? Tile();ParameterTile(p:p,tile:tile,units:config.showUnits,shortLabels:config.shortLabels).layoutValue(key:SpanKey.self,value:tile.style=="card" ? tile.span:config.columns)}}
             }
             if m.prefs.shiftEnabled && config.shiftPosition>0{ShiftStrip()}
             if !m.tpmsNotice.isEmpty{Text(m.tpmsNotice).font(.caption).foregroundStyle(.orange).padding(6)}
@@ -71,11 +82,11 @@ struct PanelView:View {
 }
 struct ParameterTile:View {
     @EnvironmentObject var m:Dashboard
-    let p:Param;let tile:Tile;let units:Bool
+    let p:Param;let tile:Tile;let units:Bool;var shortLabels=true
     var body:some View {
         let data=m.display(p,m.readings[p.label]);let alarm=m.alarmOn(p)
         Group {
-            if tile.style=="card" {VStack(alignment:.leading,spacing:4){Text(p.title).font(.system(size:max(9,tile.fontSize-4))).foregroundStyle(.secondary).lineLimit(2).minimumScaleFactor(0.7);HStack(alignment:.firstTextBaseline,spacing:2){Text(data.0).font(.system(size:tile.fontSize,weight:.semibold,design:.rounded)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.5);if units{Text(data.1).font(.system(size:max(8,tile.fontSize-5))).lineLimit(1).minimumScaleFactor(0.5)}}.foregroundStyle(Color(hex:tile.color));extrema.font(.system(size:9)).foregroundStyle(.secondary)}.frame(maxWidth:.infinity,alignment:.leading).padding(6).frame(minHeight:68)}
+            if tile.style=="card" {VStack(alignment:.leading,spacing:4){Text(PanelLabel.title(p,short:shortLabels,span:tile.span)).font(.system(size:max(9,tile.fontSize-4))).foregroundStyle(.secondary).fixedSize(horizontal:false,vertical:true);HStack(alignment:.firstTextBaseline,spacing:2){Text(data.0).font(.system(size:tile.fontSize,weight:.semibold,design:.rounded)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.5);if units{Text(data.1).font(.system(size:max(8,tile.fontSize-5))).lineLimit(1).minimumScaleFactor(0.5)}}.foregroundStyle(Color(hex:tile.color));extrema.font(.system(size:9)).foregroundStyle(.secondary)}.frame(maxWidth:.infinity,maxHeight:.infinity,alignment:.leading).padding(6).frame(minHeight:68)}
             else {VStack(spacing:2){HStack{Text(p.title).font(.system(size:tile.fontSize)).lineLimit(2);Spacer(minLength:4);extrema.font(.system(size:9)).foregroundStyle(.secondary);Text(data.0+(units ? " "+data.1:"")).font(.system(size:tile.fontSize,weight:.semibold)).monospacedDigit().foregroundStyle(Color(hex:tile.color)).lineLimit(1).minimumScaleFactor(0.5)};if tile.style=="bar"{GeometryReader{g in let value=m.fresh(p.label)?.value;let ratio=value.map{min(1,max(0,($0-tile.minimum)/max(0.001,tile.maximum-tile.minimum)))} ?? 0;ZStack(alignment:.leading){Capsule().fill(.gray.opacity(0.2));Capsule().fill(Color(hex:tile.color)).frame(width:g.size.width*ratio)}}.frame(height:4)}}.padding(7)}
         }.background(alarm ? Color.red.opacity(0.35):Color(uiColor:.secondarySystemBackground),in:RoundedRectangle(cornerRadius:10)).overlay{RoundedRectangle(cornerRadius:10).stroke(alarm ? .red:Color.primary.opacity(0.08),lineWidth:1)}.contextMenu{NavigationLink("Ajustar parâmetro"){TileEditor(key:p.label,landscape:false)}}
     }

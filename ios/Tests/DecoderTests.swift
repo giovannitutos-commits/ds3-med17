@@ -28,6 +28,14 @@ final class DecoderTests:XCTestCase {
         XCTAssertEqual(Units.convert(0,unit:"°C",celsius:false,km:true,pressure:"ECU").0,32,accuracy:0.0001)
         XCTAssertEqual(Units.convert(100,unit:"km/h",celsius:true,km:false,pressure:"ECU").0,62.1371,accuracy:0.0001)
     }
+    func testLandscapeAlarmIsSharedWithoutChangingPortraitLayout(){
+        var old=LayoutConfig();old.tiles["X"]=Tile(style:"bar")
+        var edited=old;edited.tiles["X"]?.alarm=AlarmRule(enabled:true,limit:95)
+        var portrait=LayoutConfig(columns:3);portrait.tiles["X"]=Tile(style:"card",span:2)
+        let synced=edited.sharingChangedAlarms(from:old,to:portrait)
+        XCTAssertEqual(synced.tiles["X"]?.alarm.limit,95);XCTAssertEqual(synced.tiles["X"]?.alarm.enabled,true)
+        XCTAssertEqual(synced.columns,3);XCTAssertEqual(synced.tiles["X"]?.style,"card");XCTAssertEqual(synced.tiles["X"]?.span,2)
+    }
     func testStatsIgnoreUnavailableAndStale(){let rows=CSV.parse("parameter,value,unit,quality\nX,10,V,valid\nX,20,V,valid\nX,999,V,stale\nX,,V,unavailable\n");let stat=CSV.stats(rows).first;XCTAssertEqual(stat?.count,2);XCTAssertEqual(stat?.mean,15)}
     @MainActor func testDateBlock()async{let block=Operations.dateBlock(day:31,month:10,year:2026);XCTAssertEqual(block.count,34);XCTAssertTrue(block.hasPrefix("34CF000000090000001F0A1A000000"))}
 }

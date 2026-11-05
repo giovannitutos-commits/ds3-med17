@@ -37,7 +37,13 @@ import AudioToolbox
     func save(){do{try Store.save(prefs,"preferences.json")}catch{self.error="Não foi possível salvar as configurações: "+error.localizedDescription}}
     func selectProfile(_ name:String){guard !connected && !connecting else{return};prefs.profile=name;profile=profiles.first{$0.name==name} ?? Catalog.generic;readings=[:];faults=[];faultsRead=false;ensureDefaults();save()}
     func layout(_ landscape:Bool)->LayoutConfig{prefs.layouts[profile.name+(landscape ? ":landscape":":portrait")] ?? Self.defaults(params,landscape)}
-    func setLayout(_ config:LayoutConfig,_ landscape:Bool){prefs.layouts[profile.name+(landscape ? ":landscape":":portrait")]=config;save()}
+    func setLayout(_ config:LayoutConfig,_ landscape:Bool){
+        let previous=layout(landscape)
+        let other=config.sharingChangedAlarms(from:previous,to:layout(!landscape))
+        prefs.layouts[profile.name+(landscape ? ":landscape":":portrait")]=config
+        prefs.layouts[profile.name+(landscape ? ":portrait":":landscape")]=other
+        save()
+    }
     func meters()->[Meter]{prefs.meters[profile.name] ?? [Meter(key:profile.name=="OBD-II" ? "0C":"Revs",maximum:6000),Meter(key:profile.name=="OBD-II" ? "05":"Coolant",maximum:140),Meter(key:profile.name=="OBD-II" ? "0B":"TurboPress",maximum:profile.name=="OBD-II" ? 255:3000)]}
     func updateTPMS(){
         if prefs.tpms && profile.category==0 && profile.name != "OBD-II" {for landscape in [false,true]{var config=layout(landscape);for p in Catalog.tpms.usable where !config.selected.contains(p.label){config.selected.append(p.label);config.tiles[p.label]=Tile(span:landscape ? 2:1,maximum:Double(p.limit))};setLayout(config,landscape)}}

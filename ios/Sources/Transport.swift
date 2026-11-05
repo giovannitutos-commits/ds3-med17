@@ -41,8 +41,17 @@ extension ELMCommands {
         }
     }
     func connectBLE(_ id:UUID) async throws {
-        close();guard let p=peripherals[id],let central=central,central.state == .poweredOn else{throw AppError("Adaptador BLE não encontrado. Faça uma nova busca.")}
-        peripheral=p;p.delegate=self;tx=nil;rx=nil;central.stopScan()
+        close()
+        if central==nil{central=CBCentralManager(delegate:self,queue:.main)}
+        let started=Date()
+        while central?.state != .poweredOn {
+            try Task.checkCancellation()
+            guard let state=central?.state,state == .unknown || state == .resetting else{throw AppError("Ative o Bluetooth e permita o acesso ao FrenchDiag.")}
+            try require(Date().timeIntervalSince(started)<10,"O Bluetooth não ficou disponível a tempo.")
+            try await Task.sleep(nanoseconds:100_000_000)
+        }
+        guard let central=central,let p=peripherals[id] ?? central.retrievePeripherals(withIdentifiers:[id]).first else{throw AppError("Adaptador BLE salvo não encontrado. Faça uma nova busca.")}
+        peripherals[id]=p;peripheral=p;p.delegate=self;tx=nil;rx=nil;central.stopScan()
         try await withCheckedThrowingContinuation { (cont:CheckedContinuation<Void,Error>) in connected=cont;armConnection();central.connect(p) }
     }
     private func finishConnection(){connectionDeadline?.cancel();let c=connected;connected=nil;c?.resume()}

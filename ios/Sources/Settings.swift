@@ -57,7 +57,7 @@ struct PanelEditor:View {
     @State private var search="";@State private var reset=false
     var config:Binding<LayoutConfig>{Binding(get:{m.layout(landscape)},set:{m.setLayout($0,landscape)})}
     var body:some View {List {
-        Section("Organização") {Stepper("Colunas: \(config.wrappedValue.columns)",value:config.columns,in:2...12);Toggle("Compacto",isOn:config.dense);Toggle("Exibir unidades",isOn:config.showUnits);Picker("Shiftlight",selection:config.shiftPosition){Text("No início").tag(0);Text("No fim").tag(1)};Button("Redefinir para o padrão",role:.destructive){reset=true}}
+        Section("Organização") {Stepper("Colunas: \(config.wrappedValue.columns)",value:config.columns,in:2...12);Toggle("Compacto",isOn:config.dense);Toggle("Exibir unidades",isOn:config.showUnits);Toggle("Rótulos curtos",isOn:config.shortLabels);Picker("Shiftlight",selection:config.shiftPosition){Text("No início").tag(0);Text("No fim").tag(1)};Button("Redefinir para o padrão",role:.destructive){reset=true}}
         Section("Parâmetros selecionados · arraste para ordenar") {
             ForEach(config.wrappedValue.selected,id:\.self){key in if let p=m.params.first(where:{$0.label==key}){NavigationLink{TileEditor(key:key,landscape:landscape)}label:{VStack(alignment:.leading){Text(p.title);Text(p.unit+" · "+(config.wrappedValue.tiles[key]?.style ?? "card")).font(.caption).foregroundStyle(.secondary)}}}}
                 .onMove{from,to in var c=config.wrappedValue;c.selected.move(fromOffsets:from,toOffset:to);config.wrappedValue=c}

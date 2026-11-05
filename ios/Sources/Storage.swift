@@ -4,7 +4,7 @@ import UIKit
 
 struct ColorBand:Codable,Hashable {var start:Double=0;var hex:String="#BFF078"}
 struct Meter:Codable,Hashable {var key:String;var minimum:Double=0;var maximum:Double=100;var bands:[ColorBand]=[ColorBand()];var maxHex:String="#FF4545"}
-struct AlarmRule:Codable {var enabled=false;var limit:Double=100;var below=false;var hysteresis:Double=2;var sound=true;var vibration=false;var repeatSeconds:Double=10;var tone="builtin:double"}
+struct AlarmRule:Codable,Equatable {var enabled=false;var limit:Double=100;var below=false;var hysteresis:Double=2;var sound=true;var vibration=false;var repeatSeconds:Double=10;var tone="builtin:double"}
 struct Tile:Codable {var style="card";var span=1;var minimum:Double=0;var maximum:Double=100;var fontSize:Double=16;var showExtrema=true;var color="#BFF078";var alarm=AlarmRule()}
 struct LayoutConfig:Codable {var columns=3;var selected:[String]=[];var tiles:[String:Tile]=[:];var showUnits=true;var shortLabels=true;var dense=true;var shiftPosition=0}
 struct Preferences:Codable {
@@ -60,5 +60,15 @@ enum Store {
             }
         }
         return url
+    }
+}
+
+extension LayoutConfig {
+    func sharingChangedAlarms(from previous:LayoutConfig,to other:LayoutConfig)->LayoutConfig {
+        var result=other
+        for (key,tile) in tiles where previous.tiles[key]?.alarm != tile.alarm {
+            var peer=result.tiles[key] ?? Tile();peer.alarm=tile.alarm;result.tiles[key]=peer
+        }
+        return result
     }
 }
