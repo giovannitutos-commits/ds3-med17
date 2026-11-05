@@ -6,7 +6,7 @@ import AudioToolbox
 
 @MainActor final class Dashboard: NSObject, ObservableObject, @preconcurrency CLLocationManagerDelegate {
     @Published var prefs=Store.load("preferences.json",Preferences())
-    @Published var connected=false;@Published var connecting=false;@Published var busy=false;@Published var actionRunning=false
+    @Published var fullShiftVisible=false;@Published var connected=false;@Published var connecting=false;@Published var busy=false;@Published var actionRunning=false
     @Published var status="Pronto para conectar";@Published var message:String?;@Published var error:String?
     @Published var readings:[String:Reading]=[:];@Published var extrema:[String:(Double,Double)]=[:];@Published var series:[String:[TracePoint]]=[:]
     @Published var faults:[Fault]=[];@Published var faultsRead=false;@Published var faultDate:Date?;@Published var tpmsNotice=""
@@ -14,12 +14,13 @@ import AudioToolbox
     @Published var captures=Store.load("captures.json",[Capture]());@Published var trips=Store.load("trips.json",[Trip]());@Published var currentTrip:Trip?
     @Published var learning:LearningState?=Store.load("learning.json",Optional<LearningState>.none)
     @Published var profile:Profile=Catalog.generic;@Published var share:URL?;@Published var samples=0
-    @Published var moduleReadings:[String:[String:Reading]]=[:]
-    let elm=ELMTransport();var catalog:Catalog?;var session:PSASession?
+    @Published var moduleReadings:[String:[String:Reading]]=[:];@Published var moduleFaults:[String:[Fault]]=[:]
+    let elm=ELMTransport();let sound=SoundPlayer();var catalog:Catalog?;var session:PSASession?
     private var worker:Task<Void,Never>?;private var pending:[Operation]=[];private var stopRequested=false;private var disconnectRequested=false
+    private var seenFaults=Set<String>();private var dtcBaseline=false
     private var canGeneric=true
     private var recordingSession:SessionInfo?;private var lastRecord=Date.distantPast;private var lastFault=Date.distantPast;private var lastModule=Date.distantPast
-    private var activeAlarm:[String:String]=[:];private var lastAlarm:[String:Date]=[:];private var lastShift=false
+    private var activeAlarm:[String:String]=[:];private var alarmStarted:[String:TimeInterval]=[:];private var alarmPersisted=Date.distantPast;private var lastAlarm:[String:Date]=[:];private var lastShift=false
     private var backgroundTask:UIBackgroundTaskIdentifier = .invalid
     private var previousTripAt:Date?;private var previousSpeed:Double?;private var previousFuel:Double?;private var location=CLLocationManager()
     private var cancellable:AnyCancellable?
@@ -103,7 +104,7 @@ import AudioToolbox
                     try require(selected==nil || detected==nil || selected?.name==detected?.name,"A ECU identificada difere do perfil selecionado. Confira a configuração.")
                     guard let active=selected ?? detected else{throw AppError("ECU não identificada. Selecione o perfil correto manualmente.")};profile=active
                 }
-                ensureDefaults();readings=[:];extrema=[:];series=[:];faults=[];faultsRead=false;moduleReadings=[:];samples=0
+                ensureDefaults();readings=[:];extrema=[:];series=[:];faults=[];faultsRead=false;seenFaults=[];dtcBaseline=false;moduleReadings=[:];moduleFaults=[:];samples=0
                 let commands=Array(Set(profile.usable.filter{!$0.command.hasPrefix("17") && !$0.command.hasPrefix("19")}.map{$0.command})).sorted()
                 let rpmCommand=profile.usable.first{$0.label=="Revs" || $0.label=="0C"}?.command
                 for cmd in ([rpmCommand].compactMap{$0}+commands).prefix(profile.category==9 ? 8:3){try await readGroup(cmd);if readings.values.contains(where:{$0.value != nil}){break}}
@@ -160,12 +161,17 @@ import AudioToolbox
         let result:[Fault]?
         if let s=session {
             try require(profile.category != 9,"O perfil TPMS contém apenas leituras.")
-            let cmd=s.keepAlive=="3E00" ? "1902FF":"17FF00";let raw=try await s.request(cmd,timeout:10)
+            let cmd=profile.usable.first{$0.command.hasPrefix("19") || $0.command.hasPrefix("17")}?.command ?? (s.keepAlive=="3E00" ? "190226":"17FF00");let raw=try await s.request(cmd,timeout:10)
             result=Decoder.faults(raw,cmd,definitions:catalog?.faults(profile.name) ?? [:])
         }else{result=Decoder.genericFaults(try await elm.command("03",timeout:10),can:canGeneric)}
         guard let result=result else{throw AppError("Resposta de falhas inválida. Ausência de resposta não significa ausência de DTCs.")}
-        let previous=Set(faults.map{$0.fullCode});faults=result;faultsRead=true;faultDate=Date()
-        if prefs.dtcMonitor && !Set(result.map{$0.fullCode}).subtracting(previous).isEmpty{message="Novas falhas: "+Set(result.map{$0.fullCode}).subtracting(previous).sorted().joined(separator:", ");AudioServicesPlayAlertSound(1005)}
+        faults=result;faultsRead=true;faultDate=Date()
+        announceFaults(result.map{$0.fullCode})
+    }
+    func announceFaults(_ codes:[String]){
+        let current=Set(codes);let added=current.subtracting(seenFaults)
+        if dtcBaseline && prefs.dtcMonitor && !added.isEmpty{message="Novas falhas: "+added.sorted().joined(separator:", ");if prefs.dtcSound{sound.play(prefs.dtcTone,volume:prefs.volume)};if prefs.dtcVibration{UIImpactFeedbackGenerator(style:.heavy).impactOccurred()}}
+        seenFaults.formUnion(current);dtcBaseline=true
     }
     func stationary(allowUnknown:Bool=false) async throws {
         let rpmParam=profile.usable.first{$0.label=="Revs" || $0.label=="0C"};let speedParam=profile.usable.first{["Speed","AvgFrontWheels","0D"].contains($0.label)}
@@ -186,7 +192,7 @@ import AudioToolbox
         case .clear:
             try await stationary(allowUnknown:true)
             if let s=session{message=try await Operations.clear(s)}else{let raw=try await elm.command("04",timeout:15);try require(Decoder.messages(raw).contains{$0.hasPrefix("44")},"ECU não confirmou o apagamento.");message="ECU confirmou o apagamento OBD-II; monitores de emissões podem ter sido reiniciados."}
-            faults=[];faultsRead=false;lastFault=Date()
+            faults=[];faultsRead=false;seenFaults=Set(moduleFaults.flatMap{module,values in values.map{module+" · "+$0.fullCode}});dtcBaseline=true;lastFault=Date()
         case .capture(let stage,let freeze):try await capture(stage,freeze:freeze)
         case .routine(let action,let oil):
             guard let s=session,routines.contains(action) else{throw AppError("Rotina não pertence ao perfil ativo.")}
@@ -205,7 +211,7 @@ import AudioToolbox
     func ignitionOff(){guard !connected && !connecting,learning?.phase=="reset_acknowledged" else{error="Desconecte antes de confirmar a ignição desligada.";return};learning?.phase="ignition_off";learning?.ignitionOffAt=Date();do{try Store.save(learning,"learning.json")}catch{self.error=error.localizedDescription}}
     func readModule(_ target:Profile) async throws {
         guard let s=session,profile.category==0,prefs.protocolName.hasPrefix("CAN"),[1,2,4,8].contains(target.category) else{throw AppError("Leitura de central secundária requer motor PSA em CAN.")}
-        var result:[String:Reading]=[:];var failure:Error?
+        var result:[String:Reading]=[:];var secondaryFaults:[Fault]?;var failure:Error?
         do {
             _ = try await s.request(s.keepAlive);try await s.restore(target.category)
             let child=PSASession(elm,catalog!);child.category=target.category
@@ -215,8 +221,12 @@ import AudioToolbox
                 if Date().timeIntervalSince(s.last)>1{try await s.restore(0);_ = try await s.request(s.keepAlive);try await s.restore(target.category)}
                 let raw=try await child.request(cmd);if let canonical=Decoder.canonical(raw,cmd,telemetry:true){for p in target.usable where p.command==cmd {if let r=Decoder.decode(p,canonical,software:child.software){result[p.label]=r}}}
             }
+            let cmd=target.usable.first{$0.command.hasPrefix("19") || $0.command.hasPrefix("17")}?.command ?? (child.keepAlive=="3E00" ? "190226":"17FF00")
+            let raw=try await child.request(cmd,timeout:10)
+            secondaryFaults=Decoder.faults(raw,cmd,definitions:catalog?.faults(target.name) ?? [:])
         }catch{failure=error}
         try await s.restore(0);if let failure=failure{throw failure};moduleReadings[target.name]=result
+        if let codes=secondaryFaults{let baseline=moduleFaults[target.name] != nil;moduleFaults[target.name]=codes;let names=codes.map{target.name+" · "+$0.fullCode};if baseline{announceFaults(names)}else{seenFaults.formUnion(names)}}
     }
     func capture(_ stage:String,freeze:Bool) async throws {
         var values:[String:Reading]=[:];var codes:[Fault]=[]
@@ -253,15 +263,15 @@ import AudioToolbox
             let on:Bool
             if let v=value,rule.enabled,connected {on=rule.below ? v<rule.limit+(active ? rule.hysteresis:0):v>rule.limit-(active ? rule.hysteresis:0)}else{on=false}
             if on,let v=value {
-                if let id=activeAlarm[p.label],let index=events.firstIndex(where:{$0.id==id}){events[index].last=v;events[index].extreme=rule.below ? min(events[index].extreme,v):max(events[index].extreme,v)}
-                else{let e=Event(profile:profile.name,parameter:p.label,unit:p.unit,limit:rule.limit,extreme:v,last:v,below:rule.below);events.append(e);activeAlarm[p.label]=e.id;changed=true}
-                if Date().timeIntervalSince(lastAlarm[p.label] ?? .distantPast)>=max(3,rule.repeatSeconds){if rule.sound{AudioServicesPlayAlertSound(1005)};if rule.vibration{UIImpactFeedbackGenerator(style:.heavy).impactOccurred()};lastAlarm[p.label]=Date()}
-            }else if let id=activeAlarm.removeValue(forKey:p.label),let i=events.firstIndex(where:{$0.id==id}){events[i].end=Date();events[i].reason=connected ? "Rearmado ou leitura indisponível":"Desconectado";changed=true}
+                if let id=activeAlarm[p.label],let index=events.firstIndex(where:{$0.id==id}){events[index].last=v;events[index].duration=max(0,ProcessInfo.processInfo.systemUptime-(alarmStarted[p.label] ?? ProcessInfo.processInfo.systemUptime));events[index].extreme=rule.below ? min(events[index].extreme,v):max(events[index].extreme,v)}
+                else{var e=Event(profile:profile.name,parameter:p.label,unit:p.unit,limit:rule.limit,extreme:v,last:v,below:rule.below);let context=readings.filter{$0.value.fresh && $0.value.value != nil}.sorted{$0.key<$1.key}.prefix(16);e.context=Dictionary(uniqueKeysWithValues:context.compactMap{key,r in r.value.map{(key,$0)}});e.contextUnits=Dictionary(uniqueKeysWithValues:params.filter{e.context[$0.label] != nil}.map{($0.label,$0.unit)});events.append(e);activeAlarm[p.label]=e.id;alarmStarted[p.label]=ProcessInfo.processInfo.systemUptime;changed=true}
+                if Date().timeIntervalSince(lastAlarm[p.label] ?? .distantPast)>=max(3,rule.repeatSeconds){if rule.sound{sound.play(rule.tone,volume:prefs.volume)};if rule.vibration{UIImpactFeedbackGenerator(style:.heavy).impactOccurred()};lastAlarm[p.label]=Date()}
+            }else if let id=activeAlarm.removeValue(forKey:p.label),let i=events.firstIndex(where:{$0.id==id}){events[i].end=Date();events[i].duration=max(0,ProcessInfo.processInfo.systemUptime-(alarmStarted.removeValue(forKey:p.label) ?? ProcessInfo.processInfo.systemUptime));events[i].reason=connected ? "Rearmado ou leitura indisponível":"Desconectado";changed=true}
         }
-        let shift=prefs.shiftEnabled && (rpm?.value ?? -1)>=prefs.shiftTarget
-        if shift && !lastShift{if prefs.shiftSound{AudioServicesPlayAlertSound(1005)};if prefs.shiftVibration{UIImpactFeedbackGenerator(style:.heavy).impactOccurred()}}
+        let shift=(prefs.shiftEnabled || fullShiftVisible) && (rpm?.value ?? -1)>=prefs.shiftTarget-(lastShift ? 100:0)
+        if shift && !lastShift{if prefs.shiftSound{sound.play(prefs.shiftTone,volume:prefs.volume)};if prefs.shiftVibration{UIImpactFeedbackGenerator(style:.heavy).impactOccurred()}}
         lastShift=shift
-        if changed{events=Array(events.suffix(500));do{try Store.save(events,"alarms.json")}catch{self.error=error.localizedDescription}}
+        if changed || (!activeAlarm.isEmpty && Date().timeIntervalSince(alarmPersisted)>=5){events=Array(events.suffix(500));do{try Store.save(events,"alarms.json");alarmPersisted=Date()}catch{self.error=error.localizedDescription}}
     }
     func alarmOn(_ p:Param)->Bool{activeAlarm[p.label] != nil}
     func startTrip(gps:Bool){guard connected,currentTrip==nil else{error="Conecte antes de iniciar a viagem.";return};currentTrip=Trip(profile:profile.name,factor:prefs.fuelFactor);previousTripAt=nil;previousSpeed=nil;previousFuel=nil;if gps{location.requestWhenInUseAuthorization();location.desiredAccuracy=kCLLocationAccuracyBest;location.distanceFilter=5;location.startUpdatingLocation()}}

@@ -8,7 +8,7 @@ struct SettingsView:View {
             if m.prefs.transport=="Wi-Fi"{TextField("Endereço IP",text:$m.prefs.host).keyboardType(.URL).textInputAutocapitalization(.never);TextField("Porta",text:$m.prefs.port).keyboardType(.numberPad)}
             else{NavigationLink("Selecionar adaptador BLE"){BLEDevicesView()};Text("Bluetooth clássico SPP comum não é compatível com esta versão iOS.").font(.caption).foregroundStyle(.secondary)}
             Picker("Perfil / central",selection:Binding(get:{m.prefs.profile},set:{m.selectProfile($0)})) {Text("Detectar automaticamente").tag("AUTO");ForEach(m.profiles){p in Text(p.name).tag(p.name)}}.disabled(m.connected || m.connecting)
-            if m.prefs.profile=="AUTO"{Picker("Categoria",selection:$m.prefs.category){ForEach(0..<9){i in Text(moduleName(i)).tag(i)}}}
+            if m.prefs.profile=="AUTO"{Picker("Categoria",selection:$m.prefs.category){ForEach([0,8,4,1,2],id:\.self){i in Text(moduleName(i)).tag(i)}}}
             Picker("Protocolo",selection:$m.prefs.protocolName){ForEach(["CAN","CAN variável","CAN 250 kbps","KWP rápido","KWP lento"],id:\.self){Text($0)}}.disabled(m.connected || m.connecting)
             Toggle("Conectar ao abrir",isOn:$m.prefs.autoConnect)
             if m.connected || m.connecting{Button("Desconectar",role:.destructive){m.disconnect()}}else{Button("Conectar"){m.save();m.connect()}}
@@ -19,6 +19,9 @@ struct SettingsView:View {
             Text("TPMS usa os oito PIDs do Android, endereço CAN 6AF, com restauração do endereço do motor entre consultas.").font(.caption)
             Stepper("Intervalo: \(number(m.prefs.interval)) s",value:$m.prefs.interval,in:0.2...10,step:0.2)
             Toggle("Monitorar falhas",isOn:$m.prefs.dtcMonitor)
+            Toggle("Som de novas falhas",isOn:$m.prefs.dtcSound);Toggle("Vibração de novas falhas",isOn:$m.prefs.dtcVibration)
+            NavigationLink("Som de falhas"){SoundChoiceView(tone:$m.prefs.dtcTone)}
+            Slider(value:$m.prefs.volume,in:0...1){Text("Volume dos alertas")}
             Stepper("Consulta DTC: \(Int(m.prefs.dtcInterval)) s",value:$m.prefs.dtcInterval,in:15...300,step:15)
             Toggle("Gravar sessão CSV",isOn:$m.prefs.recording)
         }
@@ -39,14 +42,15 @@ struct SettingsView:View {
         Section("Versão de teste") {Text("FrenchDiag iOS · migração do Android Teste 12");Text("Sem bloqueio por código e sem prazo de validade do aplicativo. A instalação com conta Apple gratuita precisa de renovação da assinatura pelo Sideloadly.").font(.caption);Text("Comunicação com veículo ainda depende de validação física no adaptador. CarPlay não está incluído: requer autorização específica da Apple.").font(.caption).foregroundStyle(.secondary)}
     }.navigationTitle("Configurações").onDisappear{m.save()}}
 }
-func moduleName(_ cat:Int)->String { ["Motor","Aditivo FAP","Direção","ABS/ESP","Câmbio","BSI","Climatização","Painel","Motor secundário","TPMS"].indices.contains(cat) ? ["Motor","Aditivo FAP","Direção","ABS/ESP","Câmbio","BSI","Climatização","Painel","Motor secundário","TPMS"][cat]:"Central" }
+func moduleName(_ cat:Int)->String {switch cat{case 0:return "Motor";case 8:return "Câmbio";case 4:return "Direção";case 1:return "Climatização";case 2:return "Display";case 9:return "Pneus TPMS";default:return "Central \(cat)"}}
+
 struct BLEDevicesView:View {
     @EnvironmentObject var m:Dashboard
     var body:some View {List{Section{Text(m.elm.bluetoothState).font(.caption);Button("Buscar adaptadores"){m.elm.scan()};ForEach(m.elm.devices){d in Button{m.prefs.bleID=d.id.uuidString;m.save()}label:{HStack{VStack(alignment:.leading){Text(d.name);Text(d.id.uuidString).font(.caption2).foregroundStyle(.secondary)};Spacer();if m.prefs.bleID==d.id.uuidString{Image(systemName:"checkmark")}}}}};Section("UUIDs opcionais do fabricante"){TextField("Característica de escrita",text:$m.prefs.bleWrite).textInputAutocapitalization(.characters).autocorrectionDisabled();TextField("Característica de notificação",text:$m.prefs.bleNotify).textInputAutocapitalization(.characters).autocorrectionDisabled();Text("Deixe vazio para detectar um par de características de escrita e notificação no mesmo serviço UART. Confira o manual do adaptador se a detecção não funcionar.").font(.caption)}}.navigationTitle("Bluetooth LE").onAppear{m.elm.scan()}.onDisappear{m.elm.stopScan();m.save()}}
 }
 struct ShiftSettingsView:View {
     @EnvironmentObject var m:Dashboard
-    var body:some View{Form{Toggle("Ativar shiftlight",isOn:$m.prefs.shiftEnabled);Stepper("Troca: \(Int(m.prefs.shiftTarget)) rpm",value:$m.prefs.shiftTarget,in:1000...12000,step:100);Stepper("Antecipação: \(Int(m.prefs.shiftLead)) rpm",value:$m.prefs.shiftLead,in:100...3000,step:100);Toggle("Som na troca",isOn:$m.prefs.shiftSound);Toggle("Vibração na troca",isOn:$m.prefs.shiftVibration);Text("Usa sempre a rotação real e recente do motor. Cada medidor tem suas próprias faixas de cor em Personalizar medidores.").font(.caption)}.navigationTitle("Shiftlight").onDisappear{m.save()}}
+    var body:some View{Form{Toggle("Ativar shiftlight",isOn:$m.prefs.shiftEnabled);Stepper("Troca: \(Int(m.prefs.shiftTarget)) rpm",value:$m.prefs.shiftTarget,in:1000...12000,step:100);Stepper("Antecipação: \(Int(m.prefs.shiftLead)) rpm",value:$m.prefs.shiftLead,in:100...3000,step:100);Toggle("Som na troca",isOn:$m.prefs.shiftSound);NavigationLink("Som do shiftlight"){SoundChoiceView(tone:$m.prefs.shiftTone)};Toggle("Vibração na troca",isOn:$m.prefs.shiftVibration);NavigationLink("Cores da tela cheia"){FullShiftColorEditor()};Text("Usa sempre a rotação real e recente do motor. Cada medidor tem suas próprias faixas de cor em Personalizar medidores.").font(.caption)}.navigationTitle("Shiftlight").onDisappear{m.save()}}
 }
 struct PanelEditor:View {
     @EnvironmentObject var m:Dashboard;let landscape:Bool
@@ -67,7 +71,7 @@ struct TileEditor:View {
     var tile:Binding<Tile>{Binding(get:{m.layout(landscape).tiles[key] ?? Tile()},set:{v in var c=m.layout(landscape);c.tiles[key]=v;m.setLayout(c,landscape)})}
     var body:some View {Form {
         Section("Exibição"){Picker("Formato",selection:tile.style){Text("Cartão").tag("card");Text("Barra").tag("bar");Text("Texto").tag("text")};Stepper("Largura: \(tile.wrappedValue.span)",value:tile.span,in:1...m.layout(landscape).columns);Stepper("Texto: \(Int(tile.wrappedValue.fontSize))",value:tile.fontSize,in:10...40,step:1);Toggle("Mínimo e máximo",isOn:tile.showExtrema);ColorPicker("Cor",selection:Binding(get:{Color(hex:tile.wrappedValue.color)},set:{tile.wrappedValue.color=$0.hexValue}));TextField("Escala mínima",value:tile.minimum,format:.number).keyboardType(.numbersAndPunctuation);TextField("Escala máxima",value:tile.maximum,format:.number).keyboardType(.numbersAndPunctuation)}
-        Section("Alarme · unidades originais da ECU"){Toggle("Ativar",isOn:tile.alarm.enabled);TextField("Limite",value:tile.alarm.limit,format:.number).keyboardType(.numbersAndPunctuation);Toggle("Abaixo do limite",isOn:tile.alarm.below);TextField("Histerese",value:tile.alarm.hysteresis,format:.number).keyboardType(.decimalPad);Toggle("Som",isOn:tile.alarm.sound);Toggle("Vibração",isOn:tile.alarm.vibration);Stepper("Repetir: \(Int(tile.wrappedValue.alarm.repeatSeconds)) s",value:tile.alarm.repeatSeconds,in:3...60,step:1);Text("Os alarmes usam o valor original da ECU e leituras recentes. A conversão de unidades é apenas visual.").font(.caption)}
+        Section("Alarme · unidades originais da ECU"){Toggle("Ativar",isOn:tile.alarm.enabled);TextField("Limite",value:tile.alarm.limit,format:.number).keyboardType(.numbersAndPunctuation);Toggle("Abaixo do limite",isOn:tile.alarm.below);TextField("Histerese",value:tile.alarm.hysteresis,format:.number).keyboardType(.decimalPad);Toggle("Som",isOn:tile.alarm.sound);NavigationLink("Selecionar som"){SoundChoiceView(tone:tile.alarm.tone)};Toggle("Vibração",isOn:tile.alarm.vibration);Stepper("Repetir: \(Int(tile.wrappedValue.alarm.repeatSeconds)) s",value:tile.alarm.repeatSeconds,in:3...60,step:1);Text("Os alarmes usam o valor original da ECU e leituras recentes. A conversão de unidades é apenas visual.").font(.caption)}
         Button("Redefinir este parâmetro",role:.destructive){let alarm=tile.wrappedValue.alarm;let def=Dashboard.defaults(m.params,landscape).tiles[key] ?? Tile();tile.wrappedValue=def;tile.wrappedValue.alarm=alarm}
     }.navigationTitle(m.params.first{$0.label==key}?.title ?? key)}
 }
@@ -88,4 +92,9 @@ struct MeterSlotEditor:View {
         }
         if meter.wrappedValue.maximum<=meter.wrappedValue.minimum{Text("O máximo deve ser maior que o mínimo.").foregroundStyle(.red)}
     }.navigationTitle("Medidor \(index+1)").onDisappear{var v=meter.wrappedValue;v.bands.sort{$0.start<$1.start};if v.maximum<=v.minimum{v.maximum=v.minimum+1};if !v.bands.isEmpty{v.bands[0].start=v.minimum};meter.wrappedValue=v}}
+}
+
+struct FullShiftColorEditor:View {
+    @EnvironmentObject var m:Dashboard
+    var body:some View {Form{ForEach(Array(m.prefs.shiftBands.indices),id:\.self){i in HStack{TextField("A partir de rpm",value:$m.prefs.shiftBands[i].start,format:.number).keyboardType(.numberPad);ColorPicker("Cor",selection:Binding(get:{Color(hex:m.prefs.shiftBands[i].hex)},set:{m.prefs.shiftBands[i].hex=$0.hexValue})).labelsHidden()}}.onDelete{indices in if m.prefs.shiftBands.count>indices.count{m.prefs.shiftBands.remove(atOffsets:indices)}};if m.prefs.shiftBands.count<8{Button("Adicionar faixa"){m.prefs.shiftBands.append(ColorBand(start:max(0,m.prefs.shiftTarget-1000),hex:"#EF6C00"))}};ColorPicker("Cor na troca",selection:Binding(get:{Color(hex:m.prefs.shiftMaxHex)},set:{m.prefs.shiftMaxHex=$0.hexValue}))}.navigationTitle("Cores do shiftlight").onDisappear{m.prefs.shiftBands.sort{$0.start<$1.start};if !m.prefs.shiftBands.isEmpty{m.prefs.shiftBands[0].start=0};m.save()}}
 }

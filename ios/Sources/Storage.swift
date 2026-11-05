@@ -4,18 +4,19 @@ import UIKit
 
 struct ColorBand:Codable,Hashable {var start:Double=0;var hex:String="#BFF078"}
 struct Meter:Codable,Hashable {var key:String;var minimum:Double=0;var maximum:Double=100;var bands:[ColorBand]=[ColorBand()];var maxHex:String="#FF4545"}
-struct AlarmRule:Codable {var enabled=false;var limit:Double=100;var below=false;var hysteresis:Double=2;var sound=true;var vibration=false;var repeatSeconds:Double=10}
+struct AlarmRule:Codable {var enabled=false;var limit:Double=100;var below=false;var hysteresis:Double=2;var sound=true;var vibration=false;var repeatSeconds:Double=10;var tone="builtin:double"}
 struct Tile:Codable {var style="card";var span=1;var minimum:Double=0;var maximum:Double=100;var fontSize:Double=16;var showExtrema=true;var color="#BFF078";var alarm=AlarmRule()}
 struct LayoutConfig:Codable {var columns=3;var selected:[String]=[];var tiles:[String:Tile]=[:];var showUnits=true;var shortLabels=true;var dense=true;var shiftPosition=0}
 struct Preferences:Codable {
     var profile="OBD-II";var category=0;var protocolName="CAN";var host="192.168.0.10";var port="35000";var transport="Wi-Fi"
     var bleID="";var bleWrite="";var bleNotify="";var autoConnect=false;var tpms=false;var interval:Double=1
-    var shiftEnabled=false;var shiftTarget:Double=6000;var shiftLead:Double=500;var shiftSound=true;var shiftVibration=false
+    var shiftEnabled=false;var shiftTarget:Double=6000;var shiftLead:Double=500;var shiftSound=true;var shiftVibration=false;var shiftBands:[ColorBand]=[ColorBand(start:0,hex:"#00695C"),ColorBand(start:3000,hex:"#1565C0"),ColorBand(start:4500,hex:"#F9A825"),ColorBand(start:5500,hex:"#EF6C00")];var shiftMaxHex="#C62828"
     var celsius=true;var km=true;var pressure="ECU";var theme="Escuro";var accent="#BFF078";var fontScale:Double=1
-    var layouts:[String:LayoutConfig]=[:];var meters:[String:[Meter]]=[:];var graphs:[String]=[];var dtcMonitor=false;var dtcInterval:Double=60
+    var layouts:[String:LayoutConfig]=[:];var meters:[String:[Meter]]=[:];var graphs:[String]=[];var dtcMonitor=true;var dtcInterval:Double=60
+    var dtcSound=true;var dtcVibration=false;var dtcTone="builtin:double";var shiftTone="builtin:double";var volume:Double=0.7
     var recording=false;var fuelFactor:Double=1;var vehicle="Meu veículo";var language="pt-BR"
 }
-struct Event:Codable,Identifiable {var id=UUID().uuidString;var at=Date();var end:Date?;var profile:String;var parameter:String;var unit:String;var limit:Double;var extreme:Double;var last:Double;var below:Bool;var reason=""}
+struct Event:Codable,Identifiable {var id=UUID().uuidString;var at=Date();var end:Date?;var profile:String;var parameter:String;var unit:String;var limit:Double;var extreme:Double;var last:Double;var below:Bool;var reason="";var context:[String:Double]=[:];var contextUnits:[String:String]=[:];var duration:Double=0}
 struct TracePoint:Codable,Identifiable {var at=Date();var value:Double?;var id:Date{at}}
 struct SessionInfo:Codable,Identifiable {var id=UUID().uuidString;var at=Date();var profile:String;var filename:String;var rows=0}
 struct Capture:Codable,Identifiable {var id=UUID().uuidString;var at=Date();var vehicle:String;var profile:String;var stage:String;var source:String;var faults:[Fault];var readings:[String:Reading];var units:[String:String]}

@@ -109,6 +109,9 @@ struct DialView:View {
         }.frame(width:side,height:side).frame(maxWidth:.infinity,maxHeight:.infinity)};HStack{Text(number(meter.minimum,0));Spacer();Text(number(meter.maximum,0))}.font(.caption2).foregroundStyle(.secondary).padding(.horizontal,12)}.padding(8)
     }
 }
-struct FullShiftView:View { @EnvironmentObject var m:Dashboard;let close:()->Void
-    var body:some View {let rpm=m.rpm?.value;ZStack{(rpm.map{$0>=m.prefs.shiftTarget}==true ? Color.red:Color.black).ignoresSafeArea();VStack{HStack{Spacer();Button("Fechar",action:close).padding().modifier(GlassControl())};Spacer();Text(rpm.map{number($0,0)} ?? "—").font(.system(size:110,weight:.bold,design:.rounded)).minimumScaleFactor(0.3).foregroundStyle(.white);Text("rpm").foregroundStyle(.white);ShiftStrip();Spacer()}.padding()}}
+struct FullShiftView:View {
+    @EnvironmentObject var m:Dashboard;let close:()->Void
+    @State private var latched=false
+    var background:Color{guard let rpm=m.rpm?.value else{return .black};if rpm>=m.prefs.shiftTarget || latched && rpm>=m.prefs.shiftTarget-100{return Color(hex:m.prefs.shiftMaxHex)};return Color(hex:m.prefs.shiftBands.sorted{$0.start<$1.start}.last(where:{rpm >= $0.start})?.hex ?? "#000000")}
+    var body:some View {ZStack{background.ignoresSafeArea();VStack{HStack{Spacer();Button("Fechar",action:close).padding().modifier(GlassControl())};Spacer();Text(m.rpm?.value.map{number($0,0)} ?? "—").font(.system(size:110,weight:.bold,design:.rounded)).minimumScaleFactor(0.3).foregroundStyle(.white);Text("rpm").foregroundStyle(.white);ShiftStrip();Spacer()}.padding()}.onAppear{m.fullShiftVisible=true}.onDisappear{m.fullShiftVisible=false}.onChange(of:m.rpm?.value){_,rpm in latched=rpm.map{$0>=m.prefs.shiftTarget || latched && $0>=m.prefs.shiftTarget-100} ?? false}}
 }

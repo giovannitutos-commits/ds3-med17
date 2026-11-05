@@ -1,0 +1,10 @@
+{
+  "bundle_sha256": "9564c8c067230ed89a1e5daf2b0682e715df40faac7af2abf7aa8b081237215f",
+  "files": {
+    "alarm_ds3_double.wav": "4358d1bd299bc00951fc0ba4db8f19b5dfff8e987b0a67f1ebd2d91b928a8103",
+    "alarm_triple.mp3": "200ac11ab94e5c53543b4d6b221d37f1afd91dcd187283ff25d7ba3a3be434b4",
+    "alarm_double.mp3": "b506d9b8bb22bb2d0c8464e2ba4284a2d1c27c84a3bd2a50e4c2d0a926720392",
+    "alarm_c4_service.mp3": "30c522f26698580dbc9cb06428a50118b8c7773daeff60a60a29dc7257f063fe",
+    "alarm_soft.mp3": "d3abfd04a39b4419cbb2a87e0909055d8f130232543e3172240dd3b132aeea52"
+  }
+}

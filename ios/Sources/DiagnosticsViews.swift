@@ -38,8 +38,30 @@ struct GraphsView:View {
     var body:some View{ScrollView{VStack{ForEach(keys,id:\.self){key in VStack(alignment:.leading){Text(m.params.first{$0.label==key}?.title ?? key).font(.headline);LiveGraph(key:key).frame(height:190)}.padding()}}}.navigationTitle("Gráficos").toolbar{Button("Selecionar"){choosing=true}}.sheet(isPresented:$choosing){NavigationStack{List(m.params.filter{$0.numeric}){p in Toggle(p.title,isOn:Binding(get:{keys.contains(p.label)},set:{on in var list=keys;if on && !list.contains(p.label) && list.count<4{list.append(p.label)}else if !on{list.removeAll{$0==p.label}};m.prefs.graphs=list;m.save()}))}.navigationTitle("Até quatro parâmetros").toolbar{Button("Concluir"){choosing=false}}}}}
 }
 struct ModulesView:View {
-    @EnvironmentObject var m:Dashboard;@State private var selected="";@State private var category=4
-    var body:some View{List{Section("Adicionar central secundária"){Picker("Categoria",selection:$category){ForEach([1,2,4,8],id:\.self){Text(moduleName($0)).tag($0)}};Picker("Perfil exato da central",selection:$selected){Text("Selecione").tag("");ForEach(m.profiles.filter{$0.category==category}){p in Text(p.name).tag(p.name)}};Button("Ler e acompanhar"){m.enqueue(.module(category,selected))}.disabled(selected.isEmpty || !m.connected || m.busy);Text("Selecione o perfil correto da central. A leitura restaura o endereço do motor e mantém sua sessão ativa.").font(.caption)};ForEach(m.moduleReadings.keys.sorted(),id:\.self){name in Section(name){Button("Parar acompanhamento",role:.destructive){m.moduleReadings.removeValue(forKey:name)};ForEach((m.moduleReadings[name] ?? [:]).keys.sorted(),id:\.self){k in LabeledContent(Catalog.titles[k] ?? k,value:m.moduleReadings[name]?[k].display ?? "—")}}}}.navigationTitle("Centrais secundárias")}
+    @EnvironmentObject var m:Dashboard
+    @State private var selected=""
+    @State private var category=8
+    var choices:[Profile]{m.profiles.filter{$0.category==category}}
+    var body:some View{List{addSection;ForEach(m.moduleReadings.keys.sorted(),id:\.self){name in ModuleSection(name:name)}}.navigationTitle("Centrais secundárias")}
+    var addSection:some View {
+        Section("Adicionar central secundária") {
+            Picker("Categoria",selection:$category){ForEach([1,2,4,8],id:\.self){cat in Text(moduleName(cat)).tag(cat)}}.onChange(of:category){_,_ in selected=""}
+            Picker("Perfil exato da central",selection:$selected){Text("Selecione").tag("");ForEach(choices){p in Text(p.name).tag(p.name)}}
+            Button("Ler e acompanhar"){m.enqueue(.module(category,selected))}.disabled(selected.isEmpty || !m.connected || m.busy)
+            Text("Selecione o perfil correto da central. A leitura restaura o endereço do motor e mantém sua sessão ativa.").font(.caption)
+        }
+    }
+}
+struct ModuleSection:View {
+    @EnvironmentObject var m:Dashboard
+    let name:String
+    var values:[String:Reading]{m.moduleReadings[name] ?? [:]}
+    var codes:[Fault]{m.moduleFaults[name] ?? []}
+    var body:some View {Section(name){
+        Button("Parar acompanhamento",role:.destructive){m.moduleReadings.removeValue(forKey:name);m.moduleFaults.removeValue(forKey:name)}
+        ForEach(codes){f in Text(f.fullCode+" · "+f.description).font(.caption).foregroundStyle(.orange)}
+        ForEach(values.keys.sorted(),id:\.self){key in LabeledContent(Catalog.titles[key] ?? key,value:values[key]?.display ?? "—")}
+    }}
 }
 struct WorkshopView:View {
     @EnvironmentObject var m:Dashboard;@State private var stage="Antes";@State private var beforeID=""

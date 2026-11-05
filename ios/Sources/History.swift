@@ -45,13 +45,13 @@ struct HistoryView:View {
 struct SessionDetail:View {
     @EnvironmentObject var m:Dashboard;let session:SessionInfo
     @State private var rows:[[String]]=[];@State private var comparing="";@State private var comparison:[CSVStat]=[];@State private var limit=200
-    var stats:[CSVStat]{CSV.stats(rows)}
+    @State private var stats:[CSVStat]=[]
     var body:some View{List{
         Section("Exportar"){Button("Compartilhar CSV"){snapshot(session.filename)};if FileManager.default.fileExists(atPath:Store.url(session.filename+".original").path){Button("Compartilhar original importado"){snapshot(session.filename+".original")}}}
         Section("Comparar sessões"){Picker("Comparar com",selection:$comparing){Text("Sem comparação").tag("");ForEach(m.sessions.filter{$0.id != session.id}){s in Text(s.profile+" · "+s.at.formatted()).tag(s.filename)}}.onChange(of:comparing){_,name in comparison=CSV.stats((try? String(contentsOf:Store.url(name),encoding:.utf8)).map{CSV.parse($0)} ?? [])}}
         Section("Estatísticas · valores válidos"){ForEach(stats){s in VStack(alignment:.leading){Text(Catalog.titles[s.key] ?? s.key).font(.headline);Text("Mín \(number(s.min,2)) · Máx \(number(s.max,2)) · Média \(number(s.mean,2)) \(s.unit)").font(.caption);Text("\(s.count) amostras").font(.caption2).foregroundStyle(.secondary);if let other=comparison.first(where:{$0.key==s.key && $0.unit==s.unit}){Text("Comparação: mín \(number(other.min,2)), máx \(number(other.max,2)), média \(number(other.mean,2))").font(.caption)}}}}
         Section("Leituras · primeiras \(min(limit,max(0,rows.count-1))) de \(max(0,rows.count-1))"){ForEach(Array(rows.dropFirst().prefix(limit).enumerated()),id:\.offset){_,r in Text(r.joined(separator:" · ")).font(.caption2).textSelection(.enabled)};if rows.count>limit+1{Button("Carregar mais 200"){limit+=200}}}
-    }.navigationTitle(session.at.formatted(date:.abbreviated,time:.shortened)).task{do{rows=CSV.parse(try String(contentsOf:Store.url(session.filename),encoding:.utf8))}catch{m.error=error.localizedDescription}}}
+    }.navigationTitle(session.at.formatted(date:.abbreviated,time:.shortened)).task{do{rows=CSV.parse(try String(contentsOf:Store.url(session.filename),encoding:.utf8));stats=CSV.stats(rows)}catch{m.error=error.localizedDescription}}}
     func snapshot(_ filename:String){do{let data=try Data(contentsOf:Store.url(filename));let u=FileManager.default.temporaryDirectory.appendingPathComponent(filename.hasSuffix(".original") ? "FrenchDiag-original.csv":filename);try data.write(to:u,options:.atomic);m.share=u}catch{m.error=error.localizedDescription}}
 }
 struct AlarmHistoryView:View {

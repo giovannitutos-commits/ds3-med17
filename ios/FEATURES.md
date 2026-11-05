@@ -7,13 +7,13 @@ Esta é a primeira implementação nativa em Swift/SwiftUI. Uma compilação apr
 - Catálogo: 80 perfis PSA, 2.819 descritores originais, 356 rotinas, tabelas DTC, identificação e ajuda técnica. Manifesto com SHA-256 do projeto de origem e dos recursos.
 - ELM327 Wi-Fi TCP e Bluetooth LE UART, com UUIDs configuráveis. Transações em uma fila única, framing por prompt, limite de resposta e desligamento quando a sincronização é perdida.
 - Protocolos CAN/KWP, endereços de categoria, keep-alive, identificação sem seleção aproximada, interpretação de telemetria 61FF restrita aos comandos permitidos, transforms numéricos e campos indisponíveis.
-- OBD-II genérico: parâmetros, DTCs, apagamento confirmado e freeze frame quadro zero.
+- OBD-II genérico: tabela de PIDs suportados, parâmetros, DTCs CAN/KWP, apagamento confirmado e freeze frame quadro zero. O monitor estabelece uma linha de base e não soa falhas arquivadas como se fossem novas.
 - ECU motor e os oito PIDs TPMS fornecidos, intercalados, com restauração do endereço do motor. Fórmula original de pressão `(A*255+B)/69` preservada.
 - Leitura opcional de centrais secundárias de câmbio, direção, aditivo e motor secundário, com restauração da sessão do motor.
 - Painel configurável por orientação: seleção, ordem, colunas, cartões/barras/texto, largura, fonte, unidades, extremos, cores, escala e reset preservando alarmes. Ordem padrão transcrita do Android Teste 12.
 - Três medidores com parâmetros, escalas e faixas de cor próprias, alinhados lado a lado em paisagem.
 - Shiftlight com rotação real recente, alvo e antecipação, som, vibração e tela cheia.
-- Alarmes por parâmetro, histerese, som/vibração, histórico e exportação CSV.
+- Alarmes por parâmetro, histerese, som/vibração, histórico e exportação CSV. Sons originais suave/duplo/triplo/SERVICE C4/DS3, importação de áudio personalizado e volume ajustável.
 - Registros CSV, importação com preservação do original, estatísticas, comparação de sessões e gráficos ao vivo.
 - Capturas de oficina, comparação antes/depois, exportação PDF e freeze frame sem confundir consulta com instante da falha.
 - Viagens: integração de velocidade e combustível, cobertura explícita, fator de correção, mapa GPS e exportação GPX.
@@ -27,7 +27,7 @@ Esta é a primeira implementação nativa em Swift/SwiftUI. Uma compilação apr
 - Android Auto não é portável para iPhone. CarPlay exige autorização/entitlement da Apple e não está incluído.
 - Bluetooth clássico SPP de adaptadores comuns não está disponível por CoreBluetooth; use Wi-Fi ou BLE compatível. O transporte BLE genérico exige validação do protocolo UART do adaptador.
 - O iOS controla a execução em segundo plano e não oferece o mesmo serviço permanente do Android. A versão de teste encerra a conexão quando esgota o tempo de execução permitido e interrompe rotinas ao ir para segundo plano.
-- Ícones alternativos, seleção de sons personalizados, painel de temas completo do Android, todos os filtros avançados dos registros e igualdade de textos/atalhos não estão integralmente reproduzidos nesta primeira versão.
+- Ícones alternativos, painel de temas completo do Android, todos os filtros avançados dos registros e igualdade de textos/atalhos não estão integralmente reproduzidos nesta primeira versão.
 - O funcionamento simultâneo dos módulos, recuperação de timeout TPMS, atuadores e reset em hardware depende de validação física. Não descreva esta versão como equivalente validada à versão Android.
 - Instalação gratuita usa assinatura pessoal pelo Sideloadly; capacidades dependentes de entitlements pagos não são habilitadas.
 

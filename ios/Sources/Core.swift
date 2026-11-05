@@ -178,7 +178,14 @@ enum Decoder {
         guard let message=messages(raw).first(where:{$0.hasPrefix(prefix)}),message.count>=12 else{return nil}
         let bytes=stride(from:4,to:12,by:2).compactMap{Int(message.slice($0,$0+2),radix:16)}
         guard bytes.count==4 else{return nil}
-        return Set((1...32).filter{offset in ((bytes[(offset-1)/8]>>(7-(offset-1)%8))&1)==1}.map{String(format:"%02X",base+$0)})
+        var supported=Set<String>()
+        for offset in 1...32 {
+            let index:Int=(offset-1)/8
+            let shift:Int=7-(offset-1)%8
+            let bit:Int=(bytes[index]>>shift)&1
+            if bit==1{supported.insert(String(format:"%02X",base+offset))}
+        }
+        return supported
     }
     static func genericFaults(_ raw:String,can:Bool=true)->[Fault]? {
         let messages=messages(raw).filter{$0.hasPrefix("43")};guard !messages.isEmpty else{return nil};var result:[Fault]=[]
