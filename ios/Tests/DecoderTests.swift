@@ -22,6 +22,12 @@ final class DecoderTests:XCTestCase {
     func testCSVQuotedCommasAndNewlines(){let rows=CSV.parse("a,b,c\r\n\"x,y\",\"a\"\"b\",\"line1\nline2\"\r\n");XCTAssertEqual(rows,[["a","b","c"],["x,y","a\"b","line1\nline2"]])}
     func testUnavailableQualityAndCRLF(){XCTAssertEqual(Reading(value:nil,display:"—").quality,"unavailable");XCTAssertEqual(CSV.parse("a,b\r\n1,2\r\n"),[["a","b"],["1","2"]])}
     @MainActor func testGenericRotationIsABar()async {let config=Dashboard.defaults(Catalog.generic.usable,false);XCTAssertEqual(config.tiles["0C"]?.style,"bar")}
+    func testUnitConversionKeepsGaugeScaleAndValuesConsistent(){
+        XCTAssertEqual(Units.convert(3000,unit:"mbar",celsius:true,km:true,pressure:"bar").0,3,accuracy:0.0001)
+        XCTAssertEqual(Units.convert(140,unit:"°C",celsius:false,km:true,pressure:"ECU").0,284,accuracy:0.0001)
+        XCTAssertEqual(Units.convert(0,unit:"°C",celsius:false,km:true,pressure:"ECU").0,32,accuracy:0.0001)
+        XCTAssertEqual(Units.convert(100,unit:"km/h",celsius:true,km:false,pressure:"ECU").0,62.1371,accuracy:0.0001)
+    }
     func testStatsIgnoreUnavailableAndStale(){let rows=CSV.parse("parameter,value,unit,quality\nX,10,V,valid\nX,20,V,valid\nX,999,V,stale\nX,,V,unavailable\n");let stat=CSV.stats(rows).first;XCTAssertEqual(stat?.count,2);XCTAssertEqual(stat?.mean,15)}
     @MainActor func testDateBlock()async{let block=Operations.dateBlock(day:31,month:10,year:2026);XCTAssertEqual(block.count,34);XCTAssertTrue(block.hasPrefix("34CF000000090000001F0A1A000000"))}
 }

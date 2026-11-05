@@ -98,6 +98,10 @@ struct MetersView:View {
 }
 struct DialView:View {
     @EnvironmentObject var m:Dashboard;let meter:Meter
+    func axis(_ raw:Double)->String {
+        guard let p=m.params.first(where:{$0.label==meter.key}) else{return number(raw,0)}
+        return m.display(p,Reading(value:raw,display:number(raw,0))).0
+    }
     var body:some View {
         let p=m.params.first{$0.label==meter.key};let r=m.fresh(meter.key);let value=r?.value;let ratio=value.map{min(1,max(0,($0-meter.minimum)/max(0.001,meter.maximum-meter.minimum)))} ?? 0
         let band=(value.flatMap{v in meter.bands.last(where:{v >= $0.start})?.hex}) ?? meter.bands.first?.hex ?? m.prefs.accent
@@ -105,7 +109,7 @@ struct DialView:View {
             Circle().trim(from:0,to:0.75).stroke(Color.gray.opacity(0.22),style:StrokeStyle(lineWidth:max(7,side*0.045),lineCap:.round)).rotationEffect(.degrees(135))
             if let v=value{Circle().trim(from:0,to:0.75*ratio).stroke(Color(hex:v>=meter.maximum ? meter.maxHex:band),style:StrokeStyle(lineWidth:max(7,side*0.045),lineCap:.round)).rotationEffect(.degrees(135))}
             VStack(spacing:3){Text(p.map{m.display($0,r).0} ?? "—").font(.system(size:max(24,side*0.19),weight:.semibold,design:.rounded)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.5);Text(p.map{m.display($0,r).1} ?? "").font(.system(size:max(12,side*0.065))).foregroundStyle(.secondary)}.padding(side*0.1)
-        }.frame(width:side,height:side).frame(maxWidth:.infinity,maxHeight:.infinity)};HStack{Text(number(meter.minimum,0));Spacer();Text(number(meter.maximum,0))}.font(.caption2).foregroundStyle(.secondary).padding(.horizontal,12)}.padding(8)
+        }.frame(width:side,height:side).frame(maxWidth:.infinity,maxHeight:.infinity)};HStack{Text(axis(meter.minimum));Spacer();Text(axis(meter.maximum))}.font(.caption2).foregroundStyle(.secondary).padding(.horizontal,12)}.padding(8)
     }
 }
 struct FullShiftView:View {

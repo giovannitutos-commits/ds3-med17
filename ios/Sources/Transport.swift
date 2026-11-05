@@ -100,7 +100,7 @@ extension ELMCommands {
         else if let p=peripheral,let tx=tx{let type:CBCharacteristicWriteType=tx.properties.contains(.write) ? .withResponse:.withoutResponse;let size=p.maximumWriteValueLength(for:type);if data.count>size{fail(AppError("Comando excede o MTU BLE; use Wi-Fi para esta rotina."))}else{p.writeValue(data,for:tx,type:type)}}else{fail(AppError("Adaptador desconectado."))}
     }
     func fail(_ error:Error){deadline?.cancel();connectionDeadline?.cancel();let c=connected;connected=nil;let p=pending;pending=nil;c?.resume(throwing:error);p?.resume(throwing:error)}
-    func close(){generation+=1;fail(AppError("Conexão encerrada."));let c=tcp;tcp=nil;c?.cancel();if let p=peripheral{peripheral=nil;central?.cancelPeripheralConnection(p)};tx=nil;rx=nil}
+    func close(){generation+=1;fail(AppError("Conexão encerrada."));let c=tcp;tcp=nil;c?.stateUpdateHandler=nil;c?.cancel();if let p=peripheral{peripheral=nil;central?.cancelPeripheralConnection(p)};tx=nil;rx=nil}
 }
 
 @MainActor final class PSASession {

@@ -63,11 +63,8 @@ import AudioToolbox
     }
     func display(_ p:Param,_ reading:Reading?)->(String,String,Double?) {
         guard let reading=reading,reading.fresh else{return("—",p.unit,nil)}
-        guard var value=reading.value else{return(reading.display,p.unit,nil)};var unit=p.unit
-        if ["°C","℃"].contains(unit) && !prefs.celsius {value=value*1.8+32;unit="°F"}
-        if unit=="km/h" && !prefs.km{value*=0.621371;unit="mph"}
-        let factors:[String:Double]=["Pa":1,"kPa":1000,"MPa":1_000_000,"bar":100_000,"mbar":100,"psi":6894.757]
-        if prefs.pressure != "ECU",let factor=factors[unit],let target=factors[prefs.pressure]{value=value*factor/target;unit=prefs.pressure}
+        guard let raw=reading.value else{return(reading.display,p.unit,nil)}
+        let (value,unit)=Units.convert(raw,unit:p.unit,celsius:prefs.celsius,km:prefs.km,pressure:prefs.pressure)
         let changed=unit != p.unit
         return(changed ? number(value,unit=="psi" || unit=="bar" ? 2:1):reading.display,unit,value)
     }
