@@ -1,0 +1,9 @@
+Resources/*
+!Resources/.gitkeep
+*.xcodeproj/
+build*/
+dist/
+*.xcresult/
+*.log
+resources.zip
+validation.json

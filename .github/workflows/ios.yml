@@ -1,0 +1,88 @@
+name: FrenchDiag iOS IPA
+on:
+  push:
+    branches: [frenchdiag-ios]
+    paths:
+      - 'ios/**'
+      - '.github/workflows/ios.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: frenchdiag-ios-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: ios
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select Xcode with iOS 26 SDK
+        run: |
+          python3 - <<'PY'
+          import pathlib,re,subprocess
+          options=[]
+          for p in pathlib.Path('/Applications').glob('Xcode*.app'):
+              dev=p/'Contents/Developer'
+              result=subprocess.run(['xcrun','--sdk','iphoneos','--show-sdk-version'],env={**__import__('os').environ,'DEVELOPER_DIR':str(dev)},capture_output=True,text=True)
+              if result.returncode==0:
+                  version=tuple(int(x) for x in result.stdout.strip().split('.'))
+                  if version[0]>=26:options.append((version,str(dev)))
+          if not options:raise SystemExit('An Xcode installation with iOS SDK 26+ is required for native Liquid Glass.')
+          chosen=max(options)[1]
+          subprocess.run(['sudo','xcode-select','-s',chosen],check=True)
+          print(chosen)
+          PY
+          xcodebuild -version
+      - name: Generate resources and Xcode project
+        run: |
+          brew install xcodegen
+          python3 scripts/prepare_resources.py
+          swift scripts/icon.swift Resources
+          xcodegen generate
+      - name: Choose iPhone simulator
+        run: |
+          python3 - <<'PY'
+          import json,subprocess,os
+          devices=json.loads(subprocess.check_output(['xcrun','simctl','list','devices','available','-j']))['devices']
+          choices=[(runtime,d['udid']) for runtime,items in devices.items() for d in items if d.get('isAvailable') and 'iPhone' in d['name']]
+          if not choices:raise SystemExit('No available iPhone simulator')
+          runtime,udid=sorted(choices,reverse=True)[0]
+          with open(os.environ['GITHUB_ENV'],'a') as f:f.write('SIMULATOR_ID='+udid+'\n')
+          print(runtime,udid)
+          PY
+      - name: Test recorded ECU responses and native navigation
+        run: |
+          set -o pipefail
+          xcodebuild test -project FrenchDiag.xcodeproj -scheme FrenchDiag -destination "platform=iOS Simulator,id=$SIMULATOR_ID" -derivedDataPath build-simulator -resultBundlePath TestResults.xcresult CODE_SIGNING_ALLOWED=NO 2>&1 | tee test.log
+      - name: Build for physical iPhone without a signing account
+        run: |
+          set -o pipefail
+          xcodebuild build -project FrenchDiag.xcodeproj -scheme FrenchDiag -configuration Release -destination 'generic/platform=iOS' -derivedDataPath build-device CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" 2>&1 | tee build.log
+      - name: Package unsigned IPA for Sideloadly
+        run: |
+          python3 scripts/package_ipa.py
+      - name: Preserve test and build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: FrenchDiag-iOS-Validation
+          path: |
+            ios/*.log
+            ios/TestResults.xcresult
+            ios/validation.json
+          retention-days: 14
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: FrenchDiag-iOS-Unsigned-IPA
+          path: |
+            ios/dist/FrenchDiag-iOS-Unsigned.ipa
+            ios/dist/FrenchDiag-iOS-Unsigned.ipa.sha256
+            ios/INSTALL.md
+            ios/FEATURES.md
+          if-no-files-found: error
+          retention-days: 30

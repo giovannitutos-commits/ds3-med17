@@ -1,0 +1,80 @@
+name: FrenchDiag
+options:
+  bundleIdPrefix: br.com.frenchdiag
+  deploymentTarget:
+    iOS: '17.0'
+settings:
+  base:
+    SWIFT_VERSION: '5.0'
+    IPHONEOS_DEPLOYMENT_TARGET: '17.0'
+    TARGETED_DEVICE_FAMILY: '1,2'
+    CODE_SIGNING_ALLOWED: NO
+    CURRENT_PROJECT_VERSION: 1
+    MARKETING_VERSION: '0.1.0'
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    SWIFT_STRICT_CONCURRENCY: minimal
+targets:
+  FrenchDiag:
+    type: application
+    platform: iOS
+    sources:
+      - Sources
+      - path: Resources
+        buildPhase: resources
+    info:
+      path: Info.plist
+      properties:
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UIBackgroundModes:
+          - bluetooth-central
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: br.com.frenchdiag.ios.test
+        PRODUCT_NAME: FrenchDiag
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: FrenchDiag
+        INFOPLIST_KEY_NSLocalNetworkUsageDescription: 'Conectar ao adaptador OBD Wi-Fi do seu veículo.'
+        INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription: 'Conectar ao adaptador OBD Bluetooth LE do seu veículo.'
+        INFOPLIST_KEY_NSLocationWhenInUseUsageDescription: 'Registrar o trajeto das viagens quando você solicitar.'
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UIFileSharingEnabled: YES
+        INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace: YES
+  FrenchDiagTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - Tests
+    dependencies:
+      - target: FrenchDiag
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: '$(BUILT_PRODUCTS_DIR)/FrenchDiag.app/FrenchDiag'
+        BUNDLE_LOADER: '$(TEST_HOST)'
+  FrenchDiagUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - UITests
+    dependencies:
+      - target: FrenchDiag
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: FrenchDiag
+schemes:
+  FrenchDiag:
+    build:
+      targets:
+        FrenchDiag: all
+        FrenchDiagTests: [test]
+        FrenchDiagUITests: [test]
+    test:
+      targets:
+        - FrenchDiagTests
+        - FrenchDiagUITests
