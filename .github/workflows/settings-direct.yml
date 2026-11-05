@@ -1,0 +1,92 @@
+name: FrenchDiag Direct Settings Capture
+on:
+  push:
+    branches: [frenchdiag-ios]
+    paths: ['.github/workflows/settings-direct.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  capture:
+    runs-on: macos-15
+    timeout-minutes: 18
+    defaults:
+      run:
+        working-directory: ios
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select Xcode with iOS 26 SDK
+        run: |
+          python3 - <<'PY'
+          import pathlib,re,subprocess
+          options=[]
+          for p in pathlib.Path('/Applications').glob('Xcode*.app'):
+              dev=p/'Contents/Developer'
+              result=subprocess.run(['xcrun','--sdk','iphoneos','--show-sdk-version'],env={**__import__('os').environ,'DEVELOPER_DIR':str(dev)},capture_output=True,text=True)
+              if result.returncode==0:
+                  version=tuple(int(x) for x in result.stdout.strip().split('.'))
+                  if version[0]>=26:options.append((version,str(dev)))
+          if not options:raise SystemExit('An Xcode installation with iOS SDK 26+ is required for native Liquid Glass.')
+          chosen=max(options)[1]
+          subprocess.run(['sudo','xcode-select','-s',chosen],check=True)
+          print(chosen)
+          PY
+          xcodebuild -version
+      - name: Generate resources and Xcode project
+        run: |
+          brew install xcodegen
+          python3 scripts/prepare_resources.py
+          swift scripts/icon.swift Resources
+          xcodegen generate
+      - name: Choose iPhone simulator
+        run: |
+          python3 - <<'PY'
+          import json,subprocess,os
+          devices=json.loads(subprocess.check_output(['xcrun','simctl','list','devices','available','-j']))['devices']
+          choices=[(runtime,d['udid']) for runtime,items in devices.items() for d in items if d.get('isAvailable') and 'iPhone' in d['name']]
+          if not choices:raise SystemExit('No available iPhone simulator')
+          runtime,udid=sorted(choices,reverse=True)[0]
+          with open(os.environ['GITHUB_ENV'],'a') as f:f.write('SIMULATOR_ID='+udid+'\n')
+          print(runtime,udid)
+          PY
+      - name: Add a launch route for the screenshot build only
+        run: |
+          python3 - <<'PYCODE'
+          from pathlib import Path
+          path=Path('Sources/App.swift')
+          text=path.read_text()
+          anchor='@State private var settings=false'
+          assert text.count(anchor)==1
+          path.write_text(text.replace(anchor,'@State private var settings=ProcessInfo.processInfo.arguments.contains("-capture-settings")'))
+          PYCODE
+      - name: Build simulator application
+        timeout-minutes: 6
+        run: |
+          set -o pipefail
+          xcodebuild build -project FrenchDiag.xcodeproj -scheme FrenchDiag -configuration Debug -destination 'generic/platform=iOS Simulator' -derivedDataPath capture-build CODE_SIGNING_ALLOWED=NO 2>&1 | tee capture-build.log
+          codesign --force --deep --sign - capture-build/Build/Products/Debug-iphonesimulator/FrenchDiag.app
+      - name: Boot simulator
+        timeout-minutes: 5
+        run: |
+          xcrun simctl boot "$SIMULATOR_ID"
+          xcrun simctl bootstatus "$SIMULATOR_ID" -b
+      - name: Open settings and capture the screen
+        timeout-minutes: 2
+        run: |
+          mkdir -p settings-screenshots
+          xcrun simctl install "$SIMULATOR_ID" capture-build/Build/Products/Debug-iphonesimulator/FrenchDiag.app
+          xcrun simctl launch "$SIMULATOR_ID" br.com.frenchdiag.ios.test -capture-settings
+          sleep 8
+          xcrun simctl io "$SIMULATOR_ID" screenshot settings-screenshots/Configuracoes-1.png
+          sleep 3
+          xcrun simctl io "$SIMULATOR_ID" screenshot settings-screenshots/Configuracoes-2.png
+      - name: Save capture and logs
+        if: always() && !cancelled()
+        uses: actions/upload-artifact@v4
+        with:
+          name: FrenchDiag-Settings-Direct-Capture
+          path: |
+            ios/settings-screenshots
+            ios/capture-build.log
+          retention-days: 30
+          if-no-files-found: error
