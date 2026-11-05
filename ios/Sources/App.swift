@@ -24,9 +24,8 @@ struct RootView:View {
             shell("Medidores"){MetersView()}.tabItem{Label("Medidores",systemImage:"gauge.with.dots.needle.67percent")}.tag(4)
         }
         .sheet(isPresented:$settings){NavigationStack{SettingsView().toolbar{ToolbarItem(placement:.confirmationAction){Button("Concluir"){m.save();settings=false}}}}}
-        .sheet(isPresented:Binding(get:{m.share != nil},set:{if !$0{m.share=nil}})){if let url=m.share{ShareSheet(url:url)}}
-        .alert("FrenchDiag",isPresented:Binding(get:{m.error != nil},set:{if !$0{m.error=nil}})){Button("OK"){m.error=nil}}message:{Text(m.error ?? "")}
-        .alert("Resultado",isPresented:Binding(get:{m.message != nil},set:{if !$0{m.message=nil}})){Button("OK"){m.message=nil}}message:{Text(m.message ?? "")}
+        .background(ShareBridge(url:m.share){m.share=nil}.frame(width:0,height:0))
+        .alert(m.error == nil ? "Resultado":"FrenchDiag",isPresented:Binding(get:{m.error != nil || m.message != nil},set:{if !$0{m.error=nil;m.message=nil}})){Button("OK"){m.error=nil;m.message=nil}}message:{Text(m.error ?? m.message ?? "")}
         .task{m.autoConnect()}
     }
     func shell<V:View>(_ title:String,@ViewBuilder content:()->V)->some View {
@@ -114,4 +113,26 @@ struct FullShiftView:View {
     @State private var latched=false
     var background:Color{guard let rpm=m.rpm?.value else{return .black};if rpm>=m.prefs.shiftTarget || latched && rpm>=m.prefs.shiftTarget-100{return Color(hex:m.prefs.shiftMaxHex)};return Color(hex:m.prefs.shiftBands.sorted{$0.start<$1.start}.last(where:{rpm >= $0.start})?.hex ?? "#000000")}
     var body:some View {ZStack{background.ignoresSafeArea();VStack{HStack{Spacer();Button("Fechar",action:close).padding().modifier(GlassControl())};Spacer();Text(m.rpm?.value.map{number($0,0)} ?? "—").font(.system(size:110,weight:.bold,design:.rounded)).minimumScaleFactor(0.3).foregroundStyle(.white);Text("rpm").foregroundStyle(.white);ShiftStrip();Spacer()}.padding()}.onAppear{m.fullShiftVisible=true}.onDisappear{m.fullShiftVisible=false}.onChange(of:m.rpm?.value){_,rpm in latched=rpm.map{$0>=m.prefs.shiftTarget || latched && $0>=m.prefs.shiftTarget-100} ?? false}}
+}
+
+struct ShareBridge:UIViewControllerRepresentable {
+    let url:URL?;let clear:()->Void
+    class Coordinator {var showing:URL?}
+    func makeCoordinator()->Coordinator{Coordinator()}
+    func makeUIViewController(context:Context)->UIViewController{UIViewController()}
+    func updateUIViewController(_ controller:UIViewController,context:Context){
+        guard let url=url else{context.coordinator.showing=nil;return}
+        guard context.coordinator.showing != url else{return}
+        context.coordinator.showing=url
+        DispatchQueue.main.async {
+            guard var top=controller.view.window?.rootViewController else{context.coordinator.showing=nil;return}
+            while let presented=top.presentedViewController{top=presented}
+            guard !(top is UIActivityViewController) else{return}
+            let activity=UIActivityViewController(activityItems:[url],applicationActivities:nil)
+            activity.completionWithItemsHandler={_,_,_,_ in DispatchQueue.main.async{clear()}}
+            activity.popoverPresentationController?.sourceView=top.view
+            activity.popoverPresentationController?.sourceRect=CGRect(x:top.view.bounds.midX,y:top.view.bounds.midY,width:1,height:1)
+            top.present(activity,animated:true)
+        }
+    }
 }

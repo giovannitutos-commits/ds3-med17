@@ -21,7 +21,7 @@ struct Routine: Codable, Identifiable, Hashable {
     var id: String { name + start }
 }
 struct ActionGroup: Codable { var profile: String; var actions: [Routine] }
-struct Reading: Codable { var value: Double?; var display: String; var at: Date = Date(); var fresh: Bool { Date().timeIntervalSince(at) < 15 } }
+struct Reading: Codable { var value: Double?; var display: String; var at: Date = Date(); var fresh: Bool { let age=Date().timeIntervalSince(at);return age>=0 && age<15 };var quality:String {value != nil ? "valid":display.isEmpty || display=="—" ? "unavailable":"text"} }
 struct Fault: Codable, Identifiable { var code: String; var status: String; var description: String; var detail: String; var rawCode: String; var subtype: String
     var id: String { rawCode + status }; var fullCode: String { code + (subtype.isEmpty ? "" : "-" + subtype) }
 }

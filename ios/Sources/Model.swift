@@ -32,7 +32,7 @@ import AudioToolbox
     var profiles:[Profile]{catalog?.profiles ?? [Catalog.generic]}
     var params:[Param]{profile.usable + (prefs.tpms && profile.category==0 && profile.name != "OBD-II" ? Catalog.tpms.usable:[])}
     var routines:[Routine]{catalog?.actions[profile.name] ?? []}
-    var rpm:Reading? {readings[profile.name=="OBD-II" ? "0C":"Revs"].flatMap{Date().timeIntervalSince($0.at)<2 ? $0:nil}}
+    var rpm:Reading? {readings[profile.name=="OBD-II" ? "0C":"Revs"].flatMap{Date().timeIntervalSince($0.at)>=0 && Date().timeIntervalSince($0.at)<=1.5 ? $0:nil}}
     func fresh(_ key:String)->Reading?{readings[key].flatMap{$0.fresh ? $0:nil}}
     func save(){do{try Store.save(prefs,"preferences.json")}catch{self.error="Não foi possível salvar as configurações: "+error.localizedDescription}}
     func selectProfile(_ name:String){guard !connected && !connecting else{return};prefs.profile=name;profile=profiles.first{$0.name==name} ?? Catalog.generic;readings=[:];faults=[];faultsRead=false;ensureDefaults();save()}
@@ -249,8 +249,8 @@ import AudioToolbox
             if recordingSession==nil {let id=UUID().uuidString;let s=SessionInfo(id:id,profile:profile.name,filename:"session-\(id).csv");try Store.csv(["timestamp","mode","profile","parameter","value","unit","display","acquired_at","sample_time","age_ms","quality"]).write(to:Store.url(s.filename),atomically:true,encoding:.utf8);recordingSession=s;sessions.insert(s,at:0)}
             guard var current=recordingSession else{return};let at=ISO8601DateFormatter().string(from:Date())
             var text=""
-            for p in params {guard let r=fresh(p.label) else{continue};text+=Store.csv([String(Int64(Date().timeIntervalSince1970*1000)),"real",profile.name,p.label,r.value.map{String($0)} ?? "",p.unit,r.display,String(Int64(r.at.timeIntervalSince1970*1000)),"",String(Int(max(0,Date().timeIntervalSince(r.at)*1000))),r.value==nil ? "text":"valid"])}
-            for (module,values) in moduleReadings {for (key,r) in values where r.fresh {text+=Store.csv([at,"real",module,key,r.value.map{String($0)} ?? "","",r.display,r.at.ISO8601Format(),"","",r.value==nil ? "text":"valid"])}}
+            for p in params {guard let r=fresh(p.label) else{continue};text+=Store.csv([String(Int64(Date().timeIntervalSince1970*1000)),"real",profile.name,p.label,r.value.map{String($0)} ?? "",p.unit,r.display,String(Int64(r.at.timeIntervalSince1970*1000)),"",String(Int(max(0,Date().timeIntervalSince(r.at)*1000))),r.quality])}
+            for (module,values) in moduleReadings {for (key,r) in values where r.fresh {text+=Store.csv([at,"real",module,key,r.value.map{String($0)} ?? "","",r.display,r.at.ISO8601Format(),"","",r.quality])}}
             if !text.isEmpty{let file=try FileHandle(forWritingTo:Store.url(current.filename));defer{try? file.close()};try file.seekToEnd();try file.write(contentsOf:Data(text.utf8));current.rows+=text.components(separatedBy:"\n").count-1;recordingSession=current;if let i=sessions.firstIndex(where:{$0.id==current.id}){sessions[i]=current};try Store.save(sessions,"sessions.json");samples+=1}
             lastRecord=Date()
         }catch{self.error="Erro ao gravar sessão: "+error.localizedDescription;prefs.recording=false;save()}
@@ -271,7 +271,7 @@ import AudioToolbox
         let shift=(prefs.shiftEnabled || fullShiftVisible) && (rpm?.value ?? -1)>=prefs.shiftTarget-(lastShift ? 100:0)
         if shift && !lastShift{if prefs.shiftSound{sound.play(prefs.shiftTone,volume:prefs.volume)};if prefs.shiftVibration{UIImpactFeedbackGenerator(style:.heavy).impactOccurred()}}
         lastShift=shift
-        if changed || (!activeAlarm.isEmpty && Date().timeIntervalSince(alarmPersisted)>=5){events=Array(events.suffix(500));do{try Store.save(events,"alarms.json");alarmPersisted=Date()}catch{self.error=error.localizedDescription}}
+        if changed || (!activeAlarm.isEmpty && Date().timeIntervalSince(alarmPersisted)>=5){let ids=Set(activeAlarm.values);let live=events.filter{ids.contains($0.id)};let ended=events.filter{!ids.contains($0.id)}.suffix(max(0,500-live.count));events=(live+ended).sorted{$0.at<$1.at};do{try Store.save(events,"alarms.json");alarmPersisted=Date()}catch{self.error=error.localizedDescription}}
     }
     func alarmOn(_ p:Param)->Bool{activeAlarm[p.label] != nil}
     func startTrip(gps:Bool){guard connected,currentTrip==nil else{error="Conecte antes de iniciar a viagem.";return};currentTrip=Trip(profile:profile.name,factor:prefs.fuelFactor);previousTripAt=nil;previousSpeed=nil;previousFuel=nil;if gps{location.requestWhenInUseAuthorization();location.desiredAccuracy=kCLLocationAccuracyBest;location.distanceFilter=5;location.startUpdatingLocation()}}
